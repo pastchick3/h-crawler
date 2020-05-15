@@ -1,9 +1,10 @@
 [package]
 name = "eh-manager"
 version = "0.1.0"
-authors = ["pastchick3 <331604390@qq.com>"]
+authors = ["pastchick3 <pastchick3@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+reqwest = { version = "0.10", features = ["cookies", "json"] }
