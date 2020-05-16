@@ -13,6 +13,28 @@ const EH_URL: &str = "https://e-hentai.org/";
 const EX_URL: &str = "https://exhentai.org/";
 const TIMEOUT: u64 = 30;
 
+bitflags! {
+    #[derive(Default)]
+    struct Category: u16 {
+        const DOUJINSHI = 0b0000000010;
+        const MANGA = 0b0000000100;
+        const ARTIST_CG = 0b0000001000;
+        const GAME_CG = 0b0000010000;
+        const WESTERN = 0b1000000000;
+        const NON_H = 0b0100000000;
+        const IMAGE_SET = 0b0000100000;
+        const COSPLAY = 0b0001000000;
+        const ASIAN_PORN = 0b0010000000;
+        const MISC = 0b0000000001;
+    }
+}
+
+impl From<Category> for String {
+    fn from(category: Category) -> Self {
+        category.bits.to_string()
+    }
+}
+
 pub struct Querier {
     client: Client,
     username: Option<String>,
@@ -64,8 +86,35 @@ impl Querier {
         }
     }
 
+    /// {
+    ///     "Category": [String],
+    ///     "Search": [String],
+    ///     tag: [String],
+    /// }
     pub async fn query(&self, params: HashMap<String, String>) -> HashMap<String, String> {
+        // toggle_category
         HashMap::new()
+        //
+    }
+
+    fn toggle_category(&self, categories: &[String])-> Result<String, String> {
+        let mut category: Category = Default::default();
+        for cat in categories {
+            match cat.to_lowercase().as_str() {
+                "doujinshi" => category |= Category::DOUJINSHI,
+                "manga" => category |= Category::MANGA,
+                "artist cg" => category |= Category::ARTIST_CG,
+                "game cg" => category |= Category::GAME_CG,
+                "western" => category |= Category::WESTERN,
+                "non h" => category |= Category::NON_H,
+                "image set" => category |= Category::IMAGE_SET,
+                "cosplay" => category |= Category::COSPLAY,
+                "asian porn" => category |= Category::ASIAN_PORN,
+                "misc" => category |= Category::MISC,
+                _ => {return Err(String::from(cat))}
+            }
+        }
+        Ok(String::from(category))
     }
 }
 
