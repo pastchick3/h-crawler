@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 reqwest = { version = "0.10", features = ["cookies", "json"] }
 bitflags = "1.2"
+scraper = "0.12"
