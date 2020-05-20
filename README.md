@@ -30,27 +30,8 @@ log = "0.4"
 env_logger = "0.7"
 
 
-/// {
-///     "Category": Vec<String>,
-///     "Search": Vec<String>,
-///     tag: Vec<String>,
-/// }
 
-// function toggle_category(b) {
-    //     // 每关一个就 | 对应的值
-    //     var a = document.getElementById("f_cats"); // init 0
-    //     var c = document.getElementById("cat_" + b);
-    //     if (a.getAttribute("disabled")) {
-    //         a.removeAttribute("disabled")
-    //     }
-    //     if (c.getAttribute("data-disabled")) {
-    //         c.removeAttribute("data-disabled");
-    //         a.value = parseInt(a.value) & (1023 ^ b)
-    //     } else {
-    //         c.setAttribute("data-disabled", 1);
-    //         a.value = parseInt(a.value) | b
-    //     }
-    // }
+
     
 ## main
 mod query;

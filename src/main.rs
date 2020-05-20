@@ -1,8 +1,11 @@
 mod querier;
 
+use querier::Querier;
+
 #[macro_use]
 extern crate bitflags;
 
-fn main() {
-    println!("Hello, world!");
+#[tokio::main]
+async fn main() {
+    println!("hello");
 }
