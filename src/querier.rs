@@ -65,7 +65,7 @@ type QuerierResult<T> = Result<T, String>;
 
 /// Each gallery is represented by `(gallery_id, gallery_token)`.
 /// See [EH API](https://ehwiki.org/wiki/API) for more information.
-type Gallery = (u64, String);
+type Gallery = (u32, String);
 
 /// Request body for EH API.
 /// See [EH API](https://ehwiki.org/wiki/API) for more information.
@@ -73,7 +73,7 @@ type Gallery = (u64, String);
 struct ApiRequest {
     method: String,
     gidlist: Vec<Gallery>,
-    namespace: u64,
+    namespace: u32,
 }
 
 impl ApiRequest {
@@ -97,7 +97,7 @@ struct ApiResponse {
 /// See [EH API](https://ehwiki.org/wiki/API) for more information.
 #[derive(Deserialize, Debug)]
 pub struct Metadata {
-    gid: u64,
+    gid: u32,
     token: String,
     archiver_key: String,
     title: String,
@@ -107,7 +107,7 @@ pub struct Metadata {
     uploader: String,
     posted: String,
     filecount: String,
-    filesize: u64,
+    filesize: u32,
     expunged: bool,
     rating: String,
     torrentcount: String,
