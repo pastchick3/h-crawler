@@ -1,14 +1,14 @@
-mod querier;
-mod repository;
+// mod querier;
+// mod repository;
 
-use querier::Querier;
-use repository::Repository;
+// use querier::Querier;
+// use repository::Repository;
 
-#[macro_use]
-extern crate bitflags;
+// #[macro_use]
+// extern crate bitflags;
 
-#[macro_use]
-extern crate log;
+// #[macro_use]
+// extern crate log;
 
 use std::env;
 use std::net::{Ipv4Addr, SocketAddrV4};
