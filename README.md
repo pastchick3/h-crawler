@@ -7,36 +7,33 @@ A CLI tool that manages my EH resources.
 ``` PowerShell
 # Start the application.
 #
-# Two options are supported:
+# One options is supported:
 # --resource: path to the directory containing the database and galleries.
-#       The default path is the current working directory.
-# --log: path to the directory to place error logs.
 #       The default path is the current working directory.
 #
 # One flag is supported:
-# --debug: print all logs.
+# --debug: print logs.
 > eh-manager <username> <password>
 
-# Print the database status and galleries that are being downloaded.
+# Print the database status and galleries that are not yet completely archived
+# to the local disk.
 > status
 
-# Add a new gallery into the database, and start to download images to the local disk.
-> add <url>
-
-# Query the database for specific galleries.
+# Add a new gallery into the database and start to download images.
 #
-# Three fields are supported: `title`, `group`, and `artist`.
-# `title` can be either English or Japanese and it is not required to be complete.
-# `group` and `artist` must be exactly the same as corresponding EH tags.
-#
-# This command returns a list of galleries with their id, basic information, and
-# paths on the local disk.
-> query <field> <keyward>
+# `<range>` is optional and the default range is the whole gallery. To set
+# `<range>` you should follow the format like `1-5`, which means only downloading
+# from page 1 to page 5. The page index starts from 1 and the range is inclusive
+# in both sides.
+> add <artist> <title> <url> <range>
 
 # Remove a specific gallery from the database and delete corresponding local images.
-#
-# You must comfirm this command again to make it complete.
 > remove <id>
+
+# Find specific galleries in the database.
+#
+# Both artists and titles will be checked.
+> find <keyward>
 
 # Exit the application.
 > exit
