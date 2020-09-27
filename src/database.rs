@@ -1,7 +1,16 @@
 use log::{debug, error, info, warn};
+use std::fmt;
 use std::path::Path;
 
 use crate::crawler::Crawler;
+
+pub struct Record {}
+
+impl fmt::Display for Record {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "()")
+    }
+}
 
 pub struct Database {
     crawler: Crawler,
@@ -13,7 +22,37 @@ impl Database {
             crawler: Crawler::new(username, password),
         }
     }
+
+    pub fn status(&self) -> Vec<String> {
+        todo!()
+    }
+
+    pub fn add(
+        &self,
+        artist: &str,
+        title: &str,
+        url: &str,
+        range: Option<(usize, usize)>,
+    ) -> Result<(), String> {
+        todo!()
+    }
+
+    pub fn remove(&self, artist: Option<&str>, title: Option<&str>) -> Result<(), String> {
+        todo!()
+    }
+
+    pub fn find(&self, artist: Option<&str>, title: Option<&str>) -> Vec<Record> {
+        todo!()
+    }
 }
+
+impl Drop for Database {
+    fn drop(&mut self) {
+        println!("Dropping database!");
+    }
+}
+
+// [にろ] えろえるふの湯2 @ /g/1720798/fae55905ba/ pp. 1-26 => Complete
 
 // use std::path::{Path, PathBuf};
 

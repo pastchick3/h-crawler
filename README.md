@@ -25,15 +25,26 @@ A CLI tool that manages my EH resources.
 # `<range>` you should follow the format like `1-5`, which means only downloading
 # from page 1 to page 5. The page index starts from 1 and the range is inclusive
 # in both sides.
+#
+# If `<artist>` or `<title>` contains whitespaces, you should enclose them in
+# double quotation marks.
 > add <artist> <title> <url> <range>
 
 # Remove a specific gallery from the database and delete corresponding local images.
-> remove <id>
+#
+# The wildcard character `*` can be used in either field.
+#
+# If `<artist>` or `<title>` contains whitespaces, you should enclose them in
+# double quotation marks.
+> remove <artist> <title>
 
 # Find specific galleries in the database.
 #
-# Both artists and titles will be checked.
-> find <keyward>
+# The wildcard character `*` can be used in either field.
+#
+# If `<artist>` or `<title>` contains whitespaces, you should enclose them in
+# double quotation marks.
+> find <artist> <title>
 
 # Exit the application.
 > exit
