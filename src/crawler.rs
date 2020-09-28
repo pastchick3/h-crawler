@@ -1,9 +1,13 @@
+use std::sync::mpsc::{Receiver, Sender};
+use std::path::PathBuf;
 use log::{debug, error, info, warn};
+
+use crate::gallery::Gallery;
 
 pub struct Crawler {}
 
 impl Crawler {
-    pub fn new(username: &str, password: &str) -> Self {
+    pub fn new(username: String, password: String, resource: PathBuf, task_rx: Receiver<Gallery>, result_tx: Sender<Gallery>) -> Self {
         Crawler {}
     }
 }

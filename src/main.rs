@@ -1,5 +1,6 @@
 mod crawler;
 mod database;
+mod gallery;
 
 use env_logger::Env;
 use std::io;
@@ -23,8 +24,7 @@ struct Opt {
     debug: bool,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let opt = Opt::from_args();
     let env = if opt.debug {
         Env::default().default_filter_or("debug")
@@ -32,7 +32,13 @@ async fn main() {
         Env::default().default_filter_or("warn")
     };
     env_logger::from_env(env).init();
-    let database = Database::new(&opt.username, &opt.password, &opt.resource, opt.debug);
+    let database = match Database::new(opt.username, opt.password, opt.resource) {
+        Ok(database) => database,
+        Err(err) =>{
+            println!("Error: {}", err);
+            return;
+        }
+    };
 
     repl(&database);
 }
