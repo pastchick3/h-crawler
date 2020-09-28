@@ -17,14 +17,16 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn new(username: &str, password: &str, resource: &Path) -> Self {
+    pub fn new(username: &str, password: &str, resource: &Path, debug: bool) -> Self {
+        println!("start {} {} {:?} {}", username, password, resource, debug);
         Database {
             crawler: Crawler::new(username, password),
         }
     }
 
     pub fn status(&self) -> Vec<String> {
-        todo!()
+        println!("status");
+        Vec::new()
     }
 
     pub fn add(
@@ -34,15 +36,18 @@ impl Database {
         url: &str,
         range: Option<(usize, usize)>,
     ) -> Result<(), String> {
-        todo!()
+        println!("add {} {} {} {:?}", artist, title, url, range);
+        Ok(())
     }
 
     pub fn remove(&self, artist: Option<&str>, title: Option<&str>) -> Result<(), String> {
-        todo!()
+        println!("remove {:?} {:?}", artist, title);
+        Ok(())
     }
 
     pub fn find(&self, artist: Option<&str>, title: Option<&str>) -> Vec<Record> {
-        todo!()
+        println!("find {:?} {:?}", artist, title);
+        Vec::new()
     }
 }
 

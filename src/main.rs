@@ -32,7 +32,7 @@ async fn main() {
         Env::default().default_filter_or("warn")
     };
     env_logger::from_env(env).init();
-    let database = Database::new(&opt.username, &opt.password, &opt.resource);
+    let database = Database::new(&opt.username, &opt.password, &opt.resource, opt.debug);
 
     repl(&database);
 }
@@ -66,22 +66,22 @@ fn repl(database: &Database) {
         if tokens.is_empty() {
             continue;
         }
-        match tokens[0] {
+        match tokens[0].as_str() {
             "status" => {
                 for line in database.status() {
                     println!("{}", line);
                 }
             }
             "add" => {
-                if tokens.len() <= 4 {
+                if tokens.len() < 4 {
                     println!("Error: Insufficient arguments.");
                     continue;
                 }
-                let artist = tokens[1];
-                let title = tokens[2];
-                let url = tokens[3];
+                let artist = &tokens[1];
+                let title = &tokens[2];
+                let url = &tokens[3];
                 let range = if let Some(range) = tokens.get(4) {
-                    let range: Vec<_> = range.split("-").collect();
+                    let range: Vec<_> = range.split('-').collect();
                     if range.len() != 2 {
                         println!("Error: Invalid range.");
                         continue;
@@ -110,15 +110,15 @@ fn repl(database: &Database) {
                 }
             }
             "remove" => {
-                if tokens.len() <= 3 {
+                if tokens.len() < 3 {
                     println!("Error: Insufficient arguments.");
                     continue;
                 }
-                let artist = match tokens[1] {
+                let artist = match tokens[1].as_str() {
                     "*" => None,
                     s => Some(s),
                 };
-                let title = match tokens[2] {
+                let title = match tokens[2].as_str() {
                     "*" => None,
                     s => Some(s),
                 };
@@ -138,7 +138,7 @@ fn repl(database: &Database) {
                     continue;
                 }
                 buffer.to_ascii_lowercase();
-                if !buffer.contains("y") {
+                if !buffer.contains('y') {
                     continue;
                 }
 
@@ -148,15 +148,15 @@ fn repl(database: &Database) {
                 }
             }
             "find" => {
-                if tokens.len() <= 3 {
+                if tokens.len() < 3 {
                     println!("Error: Insufficient arguments.");
                     continue;
                 }
-                let artist = match tokens[1] {
+                let artist = match tokens[1].as_str() {
                     "*" => None,
                     s => Some(s),
                 };
-                let title = match tokens[2] {
+                let title = match tokens[2].as_str() {
                     "*" => None,
                     s => Some(s),
                 };
@@ -170,58 +170,67 @@ fn repl(database: &Database) {
     }
 }
 
-fn tokenize(command: &str) -> Result<Vec<&str>, &str> {
+fn tokenize(command: &str) -> Result<Vec<String>, &str> {
+    let chars: Vec<_> = command.trim().chars().collect();
+    let mut index = 0;
     let mut tokens = Vec::new();
-    let mut i = 0;
-    let mut token_flag = false;
-    let mut quotation_flag = false;
-    let mut back_slash_flag = false;
-    for (j, ch) in command.char_indices() {
-        if let '\\' = ch {
-            back_slash_flag = true;
-            continue;
-        } else {
-            back_slash_flag = false;
-        }
 
-        match ch {
-            '"' => {
-                if token_flag && quotation_flag {
-                    tokens.push(&command[i..j]);
-                    token_flag = false;
-                    quotation_flag = false;
-                } else if token_flag && !quotation_flag {
-                    // This happens for input like `term_a"term_b"`.
-                    tokens.push(&command[i..j]);
-                    i = j + 1;
-                    token_flag = true;
-                    quotation_flag = true;
-                } else if !token_flag && quotation_flag {
-                    return Err("Enter");
-                } else {
-                    i = j + 1;
-                    token_flag = true;
-                    quotation_flag = true;
-                }
-            }
-            c if !quotation_flag => {
-                if c.is_ascii_whitespace() {
-                    tokens.push(&command[i..j]);
-                    token_flag = false;
-                } else {
-                    i = j;
-                    token_flag = true;
-                }
-            }
-            _ => (),
+    while index < chars.len() {
+        let (buffer, i) = if chars[index] == '"' {
+            read_string(&chars, index)?
+        } else {
+            read_word(&chars, index)
+        };
+        tokens.push(buffer);
+        index = skip_whitespaces(&chars, i);
+    }
+
+    Ok(tokens)
+}
+
+fn skip_whitespaces(chars: &[char], mut index: usize) -> usize {
+    while index < chars.len() && chars[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn read_string(chars: &[char], mut index: usize) -> Result<(String, usize), &'static str> {
+    index += 1; // Skip the opening quotation mark.
+    let mut buffer = String::new();
+    let mut back_slash_flag = false;
+    let mut closed = false;
+
+    while index < chars.len() {
+        if back_slash_flag {
+            back_slash_flag = false;
+            buffer.push(chars[index]);
+            index += 1;
+        } else if chars[index] == '"' {
+            closed = true;
+            index += 1;
+            break;
+        } else if chars[index] == '\\' {
+            back_slash_flag = true;
+            index += 1;
+        } else {
+            buffer.push(chars[index]);
+            index += 1;
         }
     }
-    if token_flag {
-        tokens.push(&command[i..]);
-    }
-    if quotation_flag {
-        Err("Unclosed double quotation mark.")
+
+    if closed {
+        Ok((buffer, index))
     } else {
-        Ok(tokens)
+        Err("Unclosed quotation marks.")
     }
+}
+
+fn read_word(chars: &[char], mut index: usize) -> (String, usize) {
+    let mut buffer = String::new();
+    while index < chars.len() && !chars[index].is_ascii_whitespace() {
+        buffer.push(chars[index]);
+        index += 1;
+    }
+    (buffer, index)
 }
