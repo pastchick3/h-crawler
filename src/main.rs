@@ -1,14 +1,13 @@
 mod crawler;
 mod database;
-mod gallery;
 
-use env_logger::Env;
 use std::io;
 use std::io::Write;
-use std::path::PathBuf;
 use structopt::StructOpt;
+use std::fmt::Display;
 
-use database::Database;
+use crawler::Crawler;
+use database::{Database, Gallery};
 
 #[derive(StructOpt)]
 #[structopt(name = "eh-manager")]
@@ -16,23 +15,20 @@ struct Opt {
     username: String,
 
     password: String,
-
-    #[structopt(long, parse(from_os_str), default_value = ".")]
-    resource: PathBuf,
-
-    #[structopt(long)]
-    debug: bool,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    env_logger::init();
     let opt = Opt::from_args();
-    let env = if opt.debug {
-        Env::default().default_filter_or("debug")
-    } else {
-        Env::default().default_filter_or("warn")
+    let crawler = match Crawler::new(&opt.username, &opt.password) {
+        Ok(crawler) => crawler,
+        Err(err) =>{
+            println!("Error: {}", err);
+            return;
+        }
     };
-    env_logger::from_env(env).init();
-    let database = match Database::new(opt.username, opt.password, opt.resource) {
+    let database = match Database::new() {
         Ok(database) => database,
         Err(err) =>{
             println!("Error: {}", err);
@@ -40,10 +36,6 @@ fn main() {
         }
     };
 
-    repl(&database);
-}
-
-fn repl(database: &Database) {
     loop {
         // Print the command prompt.
         print!("> ");
@@ -67,112 +59,128 @@ fn repl(database: &Database) {
                 continue;
             }
         };
-
+        
         // Execute the command.
         if tokens.is_empty() {
             continue;
         }
-        match tokens[0].as_str() {
-            "status" => {
-                for line in database.status() {
-                    println!("{}", line);
+        if tokens[0] == "exit" {break}
+        match execute(&tokens, &crawler, &database).await {
+            Ok(results) => {
+                for result in results {
+                    println!("{}", result);
                 }
             }
-            "add" => {
-                if tokens.len() < 4 {
-                    println!("Error: Insufficient arguments.");
-                    continue;
-                }
-                let artist = &tokens[1];
-                let title = &tokens[2];
-                let url = &tokens[3];
-                let range = if let Some(range) = tokens.get(4) {
-                    let range: Vec<_> = range.split('-').collect();
-                    if range.len() != 2 {
-                        println!("Error: Invalid range.");
-                        continue;
-                    }
-                    let start = match range[0].parse() {
-                        Ok(start) => start,
-                        Err(err) => {
-                            println!("Error: {}", err);
-                            continue;
-                        }
-                    };
-                    let end = match range[1].parse() {
-                        Ok(end) => end,
-                        Err(err) => {
-                            println!("Error: {}.", err);
-                            continue;
-                        }
-                    };
-                    Some((start, end))
-                } else {
-                    None
-                };
-                if let Err(err) = database.add(artist, title, url, range) {
-                    println!("Error: {}.", err);
-                    continue;
-                }
+            Err(err) => {
+                println!("Error: {}", err);
             }
-            "remove" => {
-                if tokens.len() < 3 {
-                    println!("Error: Insufficient arguments.");
-                    continue;
-                }
-                let artist = match tokens[1].as_str() {
-                    "*" => None,
-                    s => Some(s),
-                };
-                let title = match tokens[2].as_str() {
-                    "*" => None,
-                    s => Some(s),
-                };
-
-                // Require remove comfirmation.
-                println!("Are you sure to remove:");
-                for record in database.find(artist, title) {
-                    println!("{}", record)
-                }
-                print!("Press [y/n]: ");
-                io::stdout()
-                    .flush()
-                    .expect("Error: Unable to flush the REPL output.");
-                let mut buffer = String::new();
-                if let Err(err) = io::stdin().read_line(&mut buffer) {
-                    println!("Error: {}", err);
-                    continue;
-                }
-                buffer.to_ascii_lowercase();
-                if !buffer.contains('y') {
-                    continue;
-                }
-
-                if let Err(err) = database.remove(artist, title) {
-                    println!("Error: {}.", err);
-                    continue;
-                }
-            }
-            "find" => {
-                if tokens.len() < 3 {
-                    println!("Error: Insufficient arguments.");
-                    continue;
-                }
-                let artist = match tokens[1].as_str() {
-                    "*" => None,
-                    s => Some(s),
-                };
-                let title = match tokens[2].as_str() {
-                    "*" => None,
-                    s => Some(s),
-                };
-                for record in database.find(artist, title) {
-                    println!("{}", record)
-                }
-            }
-            "exit" => break,
-            _ => println!("Unknown command."),
         }
+    }
+    
+}
+
+async fn execute(tokens: &Vec<String>, crawler: &Crawler, database: &Database) -> Result<Vec<Gallery>, Box<dyn Display>> {
+    match tokens[0].as_str() {
+        "add" => {
+            if tokens.len() < 4 {
+                return Err(Box::new("Insufficient arguments."));
+            }
+            let artist = &tokens[1];
+            let title = &tokens[2];
+            let url = &tokens[3];
+            let (start, end) = if let Some(range) = tokens.get(4) {
+                let range: Vec<_> = range.split('-').collect();
+                if range.len() != 2 {
+                    return Err(Box::new("Invalid range."));
+                }
+                let start = match range[0].parse() {
+                    Ok(start) => start,
+                    Err(err) => {
+                        return Err(Box::new(err));
+                    }
+                };
+                let end = match range[1].parse() {
+                    Ok(end) => end,
+                    Err(err) => {
+                        return Err(Box::new(err));
+                    }
+                };
+                (Some(start), Some(end))
+            } else {
+                (None, None)
+            };
+
+            crawler.crawl(artist, title, url, start, end).await?;
+            if let Err(err) = database.add(artist, title, url, start, end) {
+                return Err(Box::new(err));
+            }
+            Ok(Vec::new())
+        }
+        "remove" => {
+            if tokens.len() < 3 {
+                return Err(Box::new("Insufficient arguments."));
+            }
+            let artist = match tokens[1].as_str() {
+                "*" => None,
+                s => Some(s),
+            };
+            let title = match tokens[2].as_str() {
+                "*" => None,
+                s => Some(s),
+            };
+
+            // Require remove comfirmation.
+            println!("Are you sure to remove:");
+            match database.find(artist, title) {
+                Ok(galleries) => {
+                    for gallery in galleries {
+                        println!("{}", gallery)
+                    }
+                }
+                Err(err) => {
+                    return Err(Box::new(err));
+                }
+            }
+            
+            print!("Press [y/n]: ");
+            io::stdout()
+                .flush()
+                .expect("Error: Unable to flush the REPL output.");
+            let mut buffer = String::new();
+            if let Err(err) = io::stdin().read_line(&mut buffer) {
+                return Err(Box::new(err));
+            }
+            buffer.to_ascii_lowercase();
+            if !buffer.contains('y') {
+                return Ok(Vec::new());
+            }
+
+            if let Err(err) = database.remove(artist, title) {
+                return Err(Box::new(err));
+            }
+            Ok(Vec::new())
+        }
+        "find" => {
+            if tokens.len() < 3 {
+                return Err(Box::new("Insufficient arguments."));
+            }
+            let artist = match tokens[1].as_str() {
+                "*" => None,
+                s => Some(s),
+            };
+            let title = match tokens[2].as_str() {
+                "*" => None,
+                s => Some(s),
+            };
+            // for gallery in .iter() {
+            //     println!("{}", gallery)
+            // }
+            match database.find(artist, title) {
+                Ok(galleries) => Ok(galleries),
+                Err(err) => Err(Box::new(err)),
+            }
+        }
+        _ => Err(Box::new("Unknown command.")),
     }
 }
 
