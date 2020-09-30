@@ -6,7 +6,7 @@ A command line tool that manages my EH resources.
 
 ``` PowerShell
 # Start the application.
-> eh-manager <username> <password>
+> eh-manager <ipb_member_id> <ipb_pass_hash>
 
 # Add a new gallery into the database and start to download images.
 #
@@ -19,14 +19,6 @@ A command line tool that manages my EH resources.
 # double quotation marks (e.g. `add "an artist" title url`).
 > add <artist> <title> <url> <range>
 
-# Remove a specific gallery from the database and delete corresponding local images.
-#
-# The wildcard character `*` can be used in either field (e.g. `remove artist *`).
-#
-# If `<artist>` or `<title>` contains whitespaces, you should enclose them in
-# double quotation marks (e.g. `remove "an artist" title`).
-> remove <artist> <title>
-
 # Find specific galleries in the database.
 #
 # The wildcard character `*` can be used in either field (e.g. `find artist *`).
@@ -34,6 +26,14 @@ A command line tool that manages my EH resources.
 # If `<artist>` or `<title>` contains whitespaces, you should enclose them in
 # double quotation marks (e.g. `find "an artist" title`).
 > find <artist> <title>
+
+# Remove a specific gallery from the database and delete corresponding local images.
+#
+# The wildcard character `*` can be used in either field (e.g. `remove artist *`).
+#
+# If `<artist>` or `<title>` contains whitespaces, you should enclose them in
+# double quotation marks (e.g. `remove "an artist" title`).
+> remove <artist> <title>
 
 # Exit the application.
 > exit

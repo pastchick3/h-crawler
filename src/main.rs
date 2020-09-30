@@ -1,13 +1,14 @@
 mod crawler;
 mod database;
+mod error;
 
-use std::io;
-use std::io::Write;
+use std::io::{self, Write};
 use structopt::StructOpt;
-use std::fmt::Display;
+use std::fs;
 
 use crawler::Crawler;
 use database::{Database, Gallery};
+use error::DisplayableError;
 
 #[derive(StructOpt)]
 #[structopt(name = "eh-manager")]
@@ -23,14 +24,14 @@ async fn main() {
     let opt = Opt::from_args();
     let crawler = match Crawler::new(&opt.username, &opt.password) {
         Ok(crawler) => crawler,
-        Err(err) =>{
+        Err(err) => {
             println!("Error: {}", err);
             return;
         }
     };
     let database = match Database::new() {
         Ok(database) => database,
-        Err(err) =>{
+        Err(err) => {
             println!("Error: {}", err);
             return;
         }
@@ -59,12 +60,14 @@ async fn main() {
                 continue;
             }
         };
-        
+
         // Execute the command.
         if tokens.is_empty() {
             continue;
         }
-        if tokens[0] == "exit" {break}
+        if tokens[0] == "exit" {
+            break;
+        }
         match execute(&tokens, &crawler, &database).await {
             Ok(results) => {
                 for result in results {
@@ -76,14 +79,17 @@ async fn main() {
             }
         }
     }
-    
 }
 
-async fn execute(tokens: &Vec<String>, crawler: &Crawler, database: &Database) -> Result<Vec<Gallery>, Box<dyn Display>> {
+async fn execute(
+    tokens: &[String],
+    crawler: &Crawler,
+    database: &Database,
+) -> Result<Vec<Gallery>, DisplayableError> {
     match tokens[0].as_str() {
         "add" => {
             if tokens.len() < 4 {
-                return Err(Box::new("Insufficient arguments."));
+                return Err(DisplayableError::from("Insufficient arguments."));
             }
             let artist = &tokens[1];
             let title = &tokens[2];
@@ -91,34 +97,22 @@ async fn execute(tokens: &Vec<String>, crawler: &Crawler, database: &Database) -
             let (start, end) = if let Some(range) = tokens.get(4) {
                 let range: Vec<_> = range.split('-').collect();
                 if range.len() != 2 {
-                    return Err(Box::new("Invalid range."));
+                    return Err(DisplayableError::from("Invalid range."));
                 }
-                let start = match range[0].parse() {
-                    Ok(start) => start,
-                    Err(err) => {
-                        return Err(Box::new(err));
-                    }
-                };
-                let end = match range[1].parse() {
-                    Ok(end) => end,
-                    Err(err) => {
-                        return Err(Box::new(err));
-                    }
-                };
+                let start = range[0].parse()?;
+                let end = range[1].parse()?;
                 (Some(start), Some(end))
             } else {
                 (None, None)
             };
 
             crawler.crawl(artist, title, url, start, end).await?;
-            if let Err(err) = database.add(artist, title, url, start, end) {
-                return Err(Box::new(err));
-            }
+            database.add(artist, title, url, start, end)?;
             Ok(Vec::new())
         }
         "remove" => {
             if tokens.len() < 3 {
-                return Err(Box::new("Insufficient arguments."));
+                return Err(DisplayableError::from("Insufficient arguments."));
             }
             let artist = match tokens[1].as_str() {
                 "*" => None,
@@ -131,38 +125,30 @@ async fn execute(tokens: &Vec<String>, crawler: &Crawler, database: &Database) -
 
             // Require remove comfirmation.
             println!("Are you sure to remove:");
-            match database.find(artist, title) {
-                Ok(galleries) => {
-                    for gallery in galleries {
-                        println!("{}", gallery)
-                    }
-                }
-                Err(err) => {
-                    return Err(Box::new(err));
-                }
-            }
-            
+            database
+                .find(artist, title)?
+                .iter()
+                .for_each(|g| println!("{}", g));
             print!("Press [y/n]: ");
             io::stdout()
                 .flush()
                 .expect("Error: Unable to flush the REPL output.");
             let mut buffer = String::new();
-            if let Err(err) = io::stdin().read_line(&mut buffer) {
-                return Err(Box::new(err));
-            }
+            io::stdin().read_line(&mut buffer)?;
             buffer.to_ascii_lowercase();
             if !buffer.contains('y') {
                 return Ok(Vec::new());
             }
 
-            if let Err(err) = database.remove(artist, title) {
-                return Err(Box::new(err));
+            for gallery in database.find(artist, title)? {
+                fs::remove_dir_all(format!("[{}] {}", gallery.artist, gallery.title))?;
             }
+            database.remove(artist, title)?;
             Ok(Vec::new())
         }
         "find" => {
             if tokens.len() < 3 {
-                return Err(Box::new("Insufficient arguments."));
+                return Err(DisplayableError::from("Insufficient arguments."));
             }
             let artist = match tokens[1].as_str() {
                 "*" => None,
@@ -172,15 +158,9 @@ async fn execute(tokens: &Vec<String>, crawler: &Crawler, database: &Database) -
                 "*" => None,
                 s => Some(s),
             };
-            // for gallery in .iter() {
-            //     println!("{}", gallery)
-            // }
-            match database.find(artist, title) {
-                Ok(galleries) => Ok(galleries),
-                Err(err) => Err(Box::new(err)),
-            }
+            Ok(database.find(artist, title)?)
         }
-        _ => Err(Box::new("Unknown command.")),
+        _ => Err(DisplayableError::from("Unknown command.")),
     }
 }
 

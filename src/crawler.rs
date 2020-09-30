@@ -1,13 +1,16 @@
+use futures::future;
 use log::{debug, error, info, warn};
-use std::fmt::Display;
-use std::time::Duration;
+use reqwest::header;
 use reqwest::{Client, Error};
 use scraper::{Html, Selector};
-use tokio::time;
-use reqwest::header;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::io::Write;
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::sync::Semaphore;
+use tokio::time;
+
+use crate::error::DisplayableError;
 
 const USER_AGENT: &str = concat!(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ",
@@ -15,39 +18,42 @@ const USER_AGENT: &str = concat!(
     "Chrome/81.0.4044.138 ",
     "Safari/537.36 Edg/81.0.416.72",
 );
-
-
-
-const EX_URL: &str = "https://exhentai.org/";
 const TIMEOUT: u64 = 30; // request timeout (in second)
 const DELAY: u64 = 2; // delay after each request (in second)
-const ERROR_SELECTOR: &str = "#iw p";
-const GALLERY_COUNT_SELECTOR: &str = "div.ido div:nth-child(2) p.ip";
-const GALLERY_SELECTOR: &str = "div.ido table.itg.gltc td.gl3c.glname a";
+const RETRY: u8 = 2;
+const CONCURRENCY: usize = 3;
+
+const PAGE_NUM_SELECTOR: &str = "#asm + div td:nth-last-child(2) > a";
+const IMAGE_PAGE_SELECTOR: &str = "#gdt a";
+const IMAGE_SELECTOR: &str = "#img";
 
 pub struct Crawler {
     client: Client,
+    semaphore: Semaphore,
 }
 
 impl Crawler {
-    pub fn new(username: &str, password: &str) -> Result<Self, Error> {
-        let mut headers = header::HeaderMap::new();
-        headers.insert(header::COOKIE, header::HeaderValue::from_static(COOKIE));
-        
+    pub fn new(ipb_member_id: &str, ipb_pass_hash: &str) -> Result<Self, DisplayableError> {
+        let semaphore = Semaphore::new(CONCURRENCY);
 
+        let cookie = format!(
+            "ipb_member_id={}; ipb_pass_hash={}",
+            ipb_member_id, ipb_pass_hash
+        );
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            header::HeaderValue::from_str(&cookie)
+                .map_err(|_| format!("Invalid cookie: {}", cookie))?,
+        );
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .user_agent(USER_AGENT)
-            .cookie_store(true)
             .timeout(Duration::new(TIMEOUT, 0))
             .build()?;
 
-
-        Ok(Crawler {
-            client
-        })
+        Ok(Crawler { client, semaphore })
     }
-
 
     pub async fn crawl(
         &self,
@@ -56,174 +62,149 @@ impl Crawler {
         url: &str,
         start: Option<u16>,
         end: Option<u16>,
-    ) -> Result<(), Box<dyn Display>>{
-        // Request the first index.
-        let page = self.client
-            .get(url)
-            .send()
-            .await.unwrap()
-            .text()
-            .await.unwrap();
-        let (mut images, num) = self.extract_index_pages(&page);
+    ) -> Result<(), DisplayableError> {
+        // Request the first index page and determine there are how many index pages.
+        let page = self.request_page(url).await?;
+        let page_num = self.extract_page_num(&page)?;
+        let mut image_page_urls = self.extract_image_page_urls(&page)?;
 
         // Request other index pages.
-        // 
-        // time::delay_for(Duration::from_secs(DELAY)).await;
-        for i in 1..num {
-            let page = self.client
-            .get(url)
-            .query(&[("p", i)])
-            .send()
-            .await.unwrap()
-            .text()
-            .await.unwrap();
-            let imgs = self.extract_image_links(&page);
-            images.extend(imgs);
-        }
-        
-        // Request for img pages.
-        let mut links = Vec::new();
-        for url in images {
-            let link = self.get_link(&url).await;
-            links.push(link);
-        }
-        
-        let path = PathBuf::from(format!("./[{}] {}", artist, title));
-        fs::create_dir(&path).unwrap();
-        // Download images.
-        for (i, link) in links.iter().enumerate() {
-            self.download(&link, &path, i).await;
+        for num in 1..page_num {
+            let url = format!("{}?p={}", url, num);
+            let page = self.request_page(&url).await?;
+            let urls = self.extract_image_page_urls(&page)?;
+            image_page_urls.extend(urls);
         }
 
+        // Choose the appropriate range.
+        let range = match (start, end) {
+            (Some(start), Some(end)) => (start - 1) as usize..end as usize,
+            (Some(start), None) => (start - 1) as usize..image_page_urls.len(),
+            (None, Some(end)) => 0..end as usize,
+            (None, None) => 0..image_page_urls.len(),
+        };
+
+        let mut failed_pages = Vec::new();
+        // Request for img pages.
+        let futures = image_page_urls[range]
+            .iter()
+            .map(|url| self.request_page(url));
+        let results = future::join_all(futures).await;
+        let mut image_urls = Vec::new();
+        for (i, result) in results.iter().enumerate() {
+            if let Ok(page) = result {
+                let url = self.extract_image_urls(&page)?;
+                image_urls.push((i + 1, url));
+            } else {
+                failed_pages.push(i + 1);
+            }
+        }
+
+        // Download images.
+        let path = PathBuf::from(format!("./[{}] {}", artist, title));
+        fs::create_dir(&path)?;
+        let futures = image_urls
+            .iter()
+            .map(|(i, url)| self.request_image(*i, url));
+        let results = future::join_all(futures).await;
+
+        for result in results {
+            let (image_num, bytes) = result?;
+            let filename = format!("{}.jpg", image_num);
+            let mut file = fs::File::create(path.join(filename))?;
+            file.write_all(&bytes)?;
+        }
 
         Ok(())
     }
 
-    fn extract_index_pages(&self, page: &str) -> (Vec<String>, u16) {
-        let images = self.extract_image_links(page);
-        
-        let document = Html::parse_document(page);
-
-        // Extract max page.
-        let selector = Selector::parse("#asm + div td:nth-last-child(2) > a").unwrap();
-        let num: u16 = document.select(&selector).next().unwrap().inner_html().parse().unwrap();
-        
-        return (images, num);
-
+    async fn request_page(&self, url: &str) -> Result<String, Error> {
+        let _ = self.semaphore.acquire().await;
+        let mut retry = 0;
+        loop {
+            let result = self._request_page(url).await;
+            if let Ok(page) = result {
+                return Ok(page);
+            }
+            if retry == RETRY {
+                return result;
+            }
+            retry += 1;
+            time::delay_for(Duration::from_secs(DELAY)).await;
+        }
     }
 
-    fn extract_image_links(&self, page: &str) -> Vec<String> {
-        let document = Html::parse_document(page);
-
-        // Extract images in this page.
-        let selector = Selector::parse("#gdt a").unwrap();
-        document.select(&selector)
-            .map(|elem| elem.value().attr("href").unwrap().to_string())
-            .collect()
+    async fn _request_page(&self, url: &str) -> Result<String, Error> {
+        self.client.get(url).send().await?.text().await
     }
 
-    async fn get_link(&self, url: &str) -> String {
-        let page = self.client
-            .get(url)
-            .send()
-            .await.unwrap()
-            .text()
-            .await.unwrap();
+    fn extract_page_num(&self, page: &str) -> Result<u16, String> {
+        let document = Html::parse_document(page);
+        let selector = Selector::parse(PAGE_NUM_SELECTOR).unwrap();
+        document
+            .select(&selector)
+            .next()
+            .ok_or_else(|| String::from("Can not find the page number."))?
+            .inner_html()
+            .parse()
+            .map_err(|err| format!("Can not parse the page number: {}", err))
+    }
 
+    fn extract_image_page_urls(&self, page: &str) -> Result<Vec<String>, String> {
+        let document = Html::parse_document(page);
+        let selector = Selector::parse(IMAGE_PAGE_SELECTOR).unwrap();
+        let a_tags: Vec<_> = document.select(&selector).collect();
+        if a_tags.is_empty() {
+            Err(String::from("Can not find urls for image pages."))
+        } else {
+            let mut urls = Vec::new();
+            for a_tag in a_tags {
+                let url = a_tag
+                    .value()
+                    .attr("href")
+                    .ok_or_else(|| String::from("No `href` in links to image pages."))?
+                    .to_string();
+                urls.push(url);
+            }
+            Ok(urls)
+        }
+    }
+
+    fn extract_image_urls(&self, page: &str) -> Result<String, String> {
         let document = Html::parse_document(&page);
-
-        let selector = Selector::parse("#img").unwrap();
-        document.select(&selector).next().unwrap().value().attr("src").unwrap().to_string()
+        let selector = Selector::parse(IMAGE_SELECTOR).unwrap();
+        document
+            .select(&selector)
+            .next()
+            .ok_or_else(|| String::from("Can not find the image."))?
+            .value()
+            .attr("src")
+            .map(|attr| attr.to_string())
+            .ok_or_else(|| String::from("No `src` in links to images."))
     }
 
-    async fn download(&self, link: &str, path: &Path, i: usize) {
-        let bytes = self.client
-            .get(link)
-            .send()
-            .await.unwrap()
-            .bytes()
-            .await.unwrap();
-        let name = format!("{}.jpg", i);
-        let mut file = fs::File::create(path.join(name)).unwrap();
-        file.write_all(&bytes).unwrap();
+    async fn request_image(&self, image_num: usize, url: &str) -> Result<(usize, Vec<u8>), Error> {
+        let _ = self.semaphore.acquire().await;
+        let mut retry = 0;
+        loop {
+            let result = self._request_image(url).await;
+            match result {
+                Ok(image) => {
+                    return Ok((image_num, image));
+                }
+                Err(err) if retry == RETRY => {
+                    return Err(err);
+                }
+                Err(_) => {
+                    retry += 1;
+                    time::delay_for(Duration::from_secs(DELAY)).await;
+                }
+            }
+        }
+    }
+
+    async fn _request_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let bytes = self.client.get(url).send().await?.bytes().await?;
+        Ok(bytes.into_iter().collect())
     }
 }
-
-
-
-
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     #[tokio::test]
-//     async fn category() {
-//         let querier = Querier::new();
-//         let category = querier
-//             .toggle_category(&[
-//                 String::from("Doujinshi"),
-//                 String::from("Manga"),
-//                 String::from("Artist CG"),
-//                 String::from("Game CG"),
-//                 String::from("Western"),
-//             ])
-//             .unwrap();
-//         assert_eq!(category, "542");
-//         let category = querier
-//             .toggle_category(&[
-//                 String::from("Non H"),
-//                 String::from("Image Set"),
-//                 String::from("Cosplay"),
-//                 String::from("Asian Porn"),
-//                 String::from("Misc"),
-//             ])
-//             .unwrap();
-//         assert_eq!(category, "481");
-//     }
-
-//     // To run this test, you need to provide an EXHentai account.
-//     // #[tokio::test]
-//     async fn query() {
-//         let username = "";
-//         let password = "";
-//         let querier = Querier::new_ex(username, password).await;
-//         let pack = querier
-//             .query()
-//             .exhaustive(true)
-//             .exclude_category("Misc")
-//             .term("密着エロ漫画家24時")
-//             .term("pastchick3")
-//             .tag("language", "chinese")
-//             .send()
-//             .await
-//             .unwrap();
-//         assert_eq!(pack.count, 1);
-//         assert_eq!(pack.metadata[0].gid, 1053082);
-//     }
-
-//     #[tokio::test]
-//     async fn not_exhaustive() {
-//         let querier = Querier::new();
-//         let pack = querier.query().exhaustive(false).send().await.unwrap();
-//         assert!(pack.count > GALLERIES_PER_PAGE);
-//         assert_eq!(pack.metadata.len(), GALLERIES_PER_PAGE);
-//     }
-
-//     #[tokio::test]
-//     async fn error() {
-//         let term = "vndiuhgiafsaidfhisfa:dgsgsdf";
-//         let querier = Querier::new();
-//         let result = querier.query().term(term).send().await;
-//         assert!(result.unwrap_err().contains(term));
-//     }
-
-//     #[tokio::test]
-//     async fn no_hits_found() {
-//         let term = "vndiuhgiafsaidfhisfa";
-//         let querier = Querier::new();
-//         let pack = querier.query().term(term).send().await.unwrap();
-//         assert_eq!(pack.count, 0);
-//         assert_eq!(pack.metadata.len(), 0);
-//     }
-// }
