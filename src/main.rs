@@ -2,54 +2,43 @@ mod crawler;
 mod database;
 mod error;
 
+use env_logger::Env;
+use log::error;
+use std::fs;
 use std::io::{self, Write};
 use structopt::StructOpt;
-use std::fs;
 
 use crawler::Crawler;
-use database::{Database, Gallery};
+use database::Database;
 use error::DisplayableError;
 
 #[derive(StructOpt)]
 #[structopt(name = "eh-manager")]
 struct Opt {
-    username: String,
+    ipb_member_id: String,
 
-    password: String,
+    ipb_pass_hash: String,
 }
 
 #[tokio::main]
-async fn main() {
-    env_logger::init();
+async fn main() -> Result<(), ()> {
+    env_logger::from_env(Env::default().default_filter_or("info")).init();
     let opt = Opt::from_args();
-    let crawler = match Crawler::new(&opt.username, &opt.password) {
-        Ok(crawler) => crawler,
-        Err(err) => {
-            println!("Error: {}", err);
-            return;
-        }
-    };
-    let database = match Database::new() {
-        Ok(database) => database,
-        Err(err) => {
-            println!("Error: {}", err);
-            return;
-        }
-    };
+    let crawler =
+        Crawler::new(&opt.ipb_member_id, &opt.ipb_pass_hash).map_err(|err| error!("{}", err))?;
+    let database = Database::new().map_err(|err| error!("{}", err))?;
 
+    // Enter the main REPL.
     loop {
         // Print the command prompt.
         print!("> ");
-        io::stdout()
-            .flush()
-            .expect("Error: Unable to flush the REPL output.");
+        io::stdout().flush().map_err(|err| error!("{}", err))?;
 
         // Read the input command.
         let mut command = String::new();
-        if let Err(err) = io::stdin().read_line(&mut command) {
-            println!("Error: {}", err);
-            continue;
-        }
+        io::stdin()
+            .read_line(&mut command)
+            .map_err(|err| error!("{}", err))?;
 
         // Tokenize the command.
         command.make_ascii_lowercase();
@@ -66,17 +55,10 @@ async fn main() {
             continue;
         }
         if tokens[0] == "exit" {
-            break;
+            break Ok(());
         }
-        match execute(&tokens, &crawler, &database).await {
-            Ok(results) => {
-                for result in results {
-                    println!("{}", result);
-                }
-            }
-            Err(err) => {
-                println!("Error: {}", err);
-            }
+        if let Err(err) = execute(&tokens, &crawler, &database).await {
+            println!("Error: {}", err);
         }
     }
 }
@@ -85,7 +67,7 @@ async fn execute(
     tokens: &[String],
     crawler: &Crawler,
     database: &Database,
-) -> Result<Vec<Gallery>, DisplayableError> {
+) -> Result<(), DisplayableError> {
     match tokens[0].as_str() {
         "add" => {
             if tokens.len() < 4 {
@@ -99,16 +81,47 @@ async fn execute(
                 if range.len() != 2 {
                     return Err(DisplayableError::from("Invalid range."));
                 }
-                let start = range[0].parse()?;
-                let end = range[1].parse()?;
+                let start = range[0]
+                    .parse()
+                    .map_err(|err| format!("Can not parse the image range: {}", err))?;
+                let end = range[1]
+                    .parse()
+                    .map_err(|err| format!("Can not parse the image range: {}", err))?;
                 (Some(start), Some(end))
             } else {
                 (None, None)
             };
 
-            crawler.crawl(artist, title, url, start, end).await?;
+            let failed_images = crawler.crawl(artist, title, url, start, end).await?;
             database.add(artist, title, url, start, end)?;
-            Ok(Vec::new())
+            if !failed_images.is_empty() {
+                println!("Fail to download following images:");
+                for page_num in failed_images {
+                    print!("{} ", page_num);
+                }
+                println!();
+            }
+
+            Ok(())
+        }
+        "find" => {
+            if tokens.len() < 3 {
+                return Err(DisplayableError::from("Insufficient arguments."));
+            }
+            let artist = match tokens[1].as_str() {
+                "*" => None,
+                s => Some(s),
+            };
+            let title = match tokens[2].as_str() {
+                "*" => None,
+                s => Some(s),
+            };
+
+            for result in database.find(artist, title)? {
+                println!("{}", result);
+            }
+
+            Ok(())
         }
         "remove" => {
             if tokens.len() < 3 {
@@ -132,33 +145,21 @@ async fn execute(
             print!("Press [y/n]: ");
             io::stdout()
                 .flush()
-                .expect("Error: Unable to flush the REPL output.");
-            let mut buffer = String::new();
-            io::stdin().read_line(&mut buffer)?;
-            buffer.to_ascii_lowercase();
-            if !buffer.contains('y') {
-                return Ok(Vec::new());
+                .map_err(|err| error!("{}", err))
+                .unwrap();
+            let mut command = String::new();
+            io::stdin().read_line(&mut command)?;
+            command.to_ascii_lowercase();
+            if !command.contains('y') {
+                return Ok(());
             }
 
+            // Delete galleries.
             for gallery in database.find(artist, title)? {
                 fs::remove_dir_all(format!("[{}] {}", gallery.artist, gallery.title))?;
             }
             database.remove(artist, title)?;
-            Ok(Vec::new())
-        }
-        "find" => {
-            if tokens.len() < 3 {
-                return Err(DisplayableError::from("Insufficient arguments."));
-            }
-            let artist = match tokens[1].as_str() {
-                "*" => None,
-                s => Some(s),
-            };
-            let title = match tokens[2].as_str() {
-                "*" => None,
-                s => Some(s),
-            };
-            Ok(database.find(artist, title)?)
+            Ok(())
         }
         _ => Err(DisplayableError::from("Unknown command.")),
     }
@@ -170,61 +171,56 @@ fn tokenize(command: &str) -> Result<Vec<String>, &str> {
     let mut tokens = Vec::new();
 
     while index < chars.len() {
-        let (buffer, i) = if chars[index] == '"' {
-            read_string(&chars, index)?
+        let token = if chars[index] == '"' {
+            read_string(&chars, &mut index)?
         } else {
-            read_word(&chars, index)
+            read_word(&chars, &mut index)
         };
-        tokens.push(buffer);
-        index = skip_whitespaces(&chars, i);
+        tokens.push(token);
+        skip_whitespaces(&chars, &mut index);
     }
 
     Ok(tokens)
 }
 
-fn skip_whitespaces(chars: &[char], mut index: usize) -> usize {
-    while index < chars.len() && chars[index].is_ascii_whitespace() {
-        index += 1;
-    }
-    index
-}
+fn read_string(chars: &[char], index: &mut usize) -> Result<String, &'static str> {
+    *index += 1; // Skip the opening quotation mark.
+    let mut token = String::new();
+    let mut escaped = false; // Detect the escaped character.
 
-fn read_string(chars: &[char], mut index: usize) -> Result<(String, usize), &'static str> {
-    index += 1; // Skip the opening quotation mark.
-    let mut buffer = String::new();
-    let mut back_slash_flag = false;
-    let mut closed = false;
-
-    while index < chars.len() {
-        if back_slash_flag {
-            back_slash_flag = false;
-            buffer.push(chars[index]);
-            index += 1;
-        } else if chars[index] == '"' {
-            closed = true;
-            index += 1;
+    while *index < chars.len() {
+        if escaped {
+            escaped = false;
+            token.push(chars[*index]);
+        } else if chars[*index] == '"' {
             break;
-        } else if chars[index] == '\\' {
-            back_slash_flag = true;
-            index += 1;
+        } else if chars[*index] == '\\' {
+            escaped = true;
         } else {
-            buffer.push(chars[index]);
-            index += 1;
+            token.push(chars[*index]);
         }
+        *index += 1;
     }
 
-    if closed {
-        Ok((buffer, index))
+    if let Some('"') = chars.get(*index) {
+        *index += 1; // Skip the closing quotation mark.
+        Ok(token)
     } else {
         Err("Unclosed quotation marks.")
     }
 }
 
-fn read_word(chars: &[char], mut index: usize) -> (String, usize) {
-    let mut buffer = String::new();
-    while index < chars.len() && !chars[index].is_ascii_whitespace() {
-        buffer.push(chars[index]);
-        index += 1;
+fn read_word(chars: &[char], index: &mut usize) -> String {
+    let mut token = String::new();
+    while *index < chars.len() && !chars[*index].is_ascii_whitespace() {
+        token.push(chars[*index]);
+        *index += 1;
     }
-    (buffer, index)
+    token
+}
+
+fn skip_whitespaces(chars: &[char], index: &mut usize) {
+    while *index < chars.len() && chars[*index].is_ascii_whitespace() {
+        *index += 1;
+    }
 }

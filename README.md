@@ -12,8 +12,8 @@ A command line tool that manages my EH resources.
 #
 # `<range>` is optional and the default range is the whole gallery. To set
 # `<range>` you should follow the format like `1-5`, which means only downloading
-# from page 1 to page 5. The page index starts from 1 and the range is inclusive
-# in both sides.
+# images from page 1 to page 5. The page index starts from 1 and the range is
+# inclusive in both sides.
 #
 # If `<artist>` or `<title>` contains whitespaces, you should enclose them in
 # double quotation marks (e.g. `add "an artist" title url`).

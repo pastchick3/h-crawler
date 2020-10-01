@@ -1,7 +1,8 @@
-use log::{debug, error, info, warn};
 use rusqlite::{params, Connection, Result};
 use std::fmt;
 use std::path::PathBuf;
+
+const PATH: &str = "./galleries.db";
 
 pub struct Gallery {
     pub artist: String,
@@ -31,7 +32,7 @@ pub struct Database {
 
 impl Database {
     pub fn new() -> Result<Self> {
-        let path = PathBuf::from("./galleries.db");
+        let path = PathBuf::from(PATH);
         let conn = if path.is_file() {
             Connection::open(path)?
         } else {
@@ -66,11 +67,6 @@ impl Database {
         )
     }
 
-    pub fn remove(&self, artist: Option<&str>, title: Option<&str>) -> Result<usize> {
-        let (sql, params) = self.assemble_sql("DELETE FROM Galleries", artist, title);
-        self.conn.execute(&sql, params)
-    }
-
     pub fn find(&self, artist: Option<&str>, title: Option<&str>) -> Result<Vec<Gallery>> {
         let (sql, params) = self.assemble_sql(
             "SELECT artist, title, url, start, end FROM Galleries",
@@ -87,12 +83,16 @@ impl Database {
                 end: row.get(4)?,
             })
         })?;
-
         let mut galleries = Vec::new();
         for gallery in iter {
             galleries.push(gallery?);
         }
         Ok(galleries)
+    }
+
+    pub fn remove(&self, artist: Option<&str>, title: Option<&str>) -> Result<usize> {
+        let (sql, params) = self.assemble_sql("DELETE FROM Galleries", artist, title);
+        self.conn.execute(&sql, params)
     }
 
     fn assemble_sql<'a>(
