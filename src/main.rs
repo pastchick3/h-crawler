@@ -18,12 +18,19 @@ struct Opt {
     ipb_member_id: String,
 
     ipb_pass_hash: String,
+
+    #[structopt(long)]
+    debug: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
-    env_logger::from_env(Env::default().default_filter_or("info")).init();
     let opt = Opt::from_args();
+    if opt.debug {
+        env_logger::from_env(Env::default().default_filter_or("eh_manager::crawler=debug")).init();
+    } else {
+        env_logger::from_env(Env::default().default_filter_or("eh_manager::crawler=info")).init();
+    }
     let crawler =
         Crawler::new(&opt.ipb_member_id, &opt.ipb_pass_hash).map_err(|err| error!("{}", err))?;
     let database = Database::new().map_err(|err| error!("{}", err))?;
@@ -87,6 +94,9 @@ async fn execute(
                 let end = range[1]
                     .parse()
                     .map_err(|err| format!("Can not parse the image range: {}", err))?;
+                if start == 0 || start > end {
+                    return Err(DisplayableError::from("Invalid range."));
+                }
                 (Some(start), Some(end))
             } else {
                 (None, None)
@@ -96,10 +106,13 @@ async fn execute(
             database.add(artist, title, url, start, end)?;
             if !failed_images.is_empty() {
                 println!("Fail to download following images:");
+                let mut buffer = String::new();
                 for page_num in failed_images {
-                    print!("{} ", page_num);
+                    buffer.push_str(&format!("{}, ", page_num));
                 }
-                println!();
+                buffer.pop();
+                buffer.pop();
+                println!("{}", buffer);
             }
 
             Ok(())

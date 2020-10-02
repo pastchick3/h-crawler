@@ -100,14 +100,16 @@ impl Database {
         sql: &str,
         artist: Option<&'a str>,
         title: Option<&'a str>,
-    ) -> (String, Vec<&'a str>) {
+    ) -> (String, Vec<String>) {
+        let artist = artist.map(|v| format!("%{}%", v));
+        let title = title.map(|v| format!("%{}%", v));
         match (artist, title) {
             (Some(artist), Some(title)) => (
-                String::from(sql) + " where artist = ?1 AND title = ?2",
+                String::from(sql) + " where artist LIKE ?1 AND title LIKE ?2",
                 vec![artist, title],
             ),
-            (None, Some(title)) => (String::from(sql) + " where title = ?1", vec![title]),
-            (Some(artist), None) => (String::from(sql) + " where artist = ?1", vec![artist]),
+            (None, Some(title)) => (String::from(sql) + " where title LIKE ?1", vec![title]),
+            (Some(artist), None) => (String::from(sql) + " where artist LIKE ?1", vec![artist]),
             (None, None) => (String::from(sql), vec![]),
         }
     }

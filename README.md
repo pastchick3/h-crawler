@@ -6,6 +6,8 @@ A command line tool that manages my EH resources.
 
 ``` PowerShell
 # Start the application.
+#
+# Enter `--debug` flag for more debug logs.
 > eh-manager <ipb_member_id> <ipb_pass_hash>
 
 # Add a new gallery into the database and start to download images.
