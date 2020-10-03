@@ -21,6 +21,7 @@ const USER_AGENT: &str = concat!(
 );
 const TIMEOUT: u64 = 20;
 const RETRY: usize = 1;
+const RELOAD: usize = 2;
 const CONCURRENCY: usize = 5;
 const PAGE_NUM_SELECTOR: &str = "#asm + div td:nth-last-child(2) > a";
 const IMAGE_PAGE_SELECTOR: &str = "#gdt a";
@@ -112,10 +113,10 @@ impl Crawler {
             .map_err(|err| format!("Can not create the gallery directory: {}", err))?;
 
         // Enter the main downloading loop.
-        for retry in 0..=RETRY {
+        for reload in 0..=RELOAD {
             let futures = images
                 .iter_mut()
-                .map(|(i, u, b, r)| self._crawl(i, u, b, r, retry));
+                .map(|(i, u, b, q)| self._crawl(i, u, b, q, reload));
             let results = future::join_all(futures).await;
             for result in results {
                 result?;
@@ -141,8 +142,8 @@ impl Crawler {
         image_num: &usize,
         url: &str,
         bytes: &mut Option<Vec<u8>>,
-        reload: &mut Option<(String, String)>,
-        retry: usize,
+        query: &mut Option<(String, String)>,
+        reload: usize,
     ) -> Result<(), DisplayableError> {
         // Return if this image has been downloaded.
         if bytes.is_some() {
@@ -150,14 +151,14 @@ impl Crawler {
         }
 
         // Request for image pages.
-        let result = self.request_page(url, &Option::clone(reload)).await;
+        let result = self.request_page(url, &Option::clone(query)).await;
         let page = if let Ok(page) = result {
             page
         } else {
             return Ok(());
         };
-        let (image_url, new_reload) = self.extract_image_urls(&page)?;
-        *reload = Some(new_reload);
+        let (image_url, new_query) = self.extract_image_urls(&page)?;
+        *query = Some(new_query);
 
         // Download images.
         let result = self.request_image(&image_url).await;
@@ -168,12 +169,12 @@ impl Crawler {
         }
 
         // Print the log.
-        if retry == 0 {
+        if reload == 0 {
             info!("Downloading image {} {}.", image_num, status);
         } else {
             info!(
-                "Downloading image {} (retry {}) {}.",
-                image_num, retry, status
+                "Downloading image {} (reload {}) {}.",
+                image_num, reload, status
             );
         }
 
