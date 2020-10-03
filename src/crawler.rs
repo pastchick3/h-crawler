@@ -68,7 +68,7 @@ impl Crawler {
     ) -> Result<Vec<usize>, DisplayableError> {
         // Request the first index page, determine the number of index pages,
         // and extract urls to image pages.
-        let page = self.request_page(url, &None).await?;
+        let page = self.request_page(url, &Vec::new()).await?;
         let page_num = self.extract_page_num(&page)?;
         let mut image_page_urls = self.extract_image_page_urls(&page)?;
         info!("Find {} index page(s).", page_num);
@@ -76,7 +76,7 @@ impl Crawler {
         // Request other index pages and extract urls to image pages.
         for num in 1..page_num {
             let page = self
-                .request_page(&url, &Some((String::from("p"), format!("{}", num))))
+                .request_page(&url, &[(String::from("p"), format!("{}", num))])
                 .await?;
             let urls = self.extract_image_page_urls(&page)?;
             image_page_urls.extend(urls);
@@ -103,7 +103,7 @@ impl Crawler {
         let mut images: Vec<_> = image_page_urls[range]
             .iter()
             .enumerate()
-            .map(|(i, url)| (i + 1, url, None, None))
+            .map(|(i, url)| (i + 1, url, None, Vec::new()))
             .collect();
         info!("Select {} image(s).", images.len());
 
@@ -142,7 +142,7 @@ impl Crawler {
         image_num: &usize,
         url: &str,
         bytes: &mut Option<Vec<u8>>,
-        query: &mut Option<(String, String)>,
+        query: &mut Vec<(String, String)>,
         reload: usize,
     ) -> Result<(), DisplayableError> {
         // Return if this image has been downloaded.
@@ -151,14 +151,14 @@ impl Crawler {
         }
 
         // Request for image pages.
-        let result = self.request_page(url, &Option::clone(query)).await;
+        let result = self.request_page(url, query).await;
         let page = if let Ok(page) = result {
             page
         } else {
             return Ok(());
         };
         let (image_url, new_query) = self.extract_image_urls(&page)?;
-        *query = Some(new_query);
+        query.push(new_query);
 
         // Download images.
         let result = self.request_image(&image_url).await;
@@ -181,11 +181,7 @@ impl Crawler {
         Ok(())
     }
 
-    async fn request_page(
-        &self,
-        url: &str,
-        query: &Option<(String, String)>,
-    ) -> Result<String, Error> {
+    async fn request_page(&self, url: &str, query: &[(String, String)]) -> Result<String, Error> {
         let _ = self.semaphore.acquire().await;
         let mut retry = 0;
         loop {
@@ -219,16 +215,8 @@ impl Crawler {
         }
     }
 
-    async fn _request_page(
-        &self,
-        url: &str,
-        query: &Option<(String, String)>,
-    ) -> Result<String, Error> {
-        let mut request = self.client.get(url);
-        if let Some(query) = query {
-            request = request.query(&[query]);
-        }
-        request.send().await?.text().await
+    async fn _request_page(&self, url: &str, query: &[(String, String)]) -> Result<String, Error> {
+        self.client.get(url).query(query).send().await?.text().await
     }
 
     fn extract_page_num(&self, page: &str) -> Result<u16, String> {
