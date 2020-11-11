@@ -4,9 +4,11 @@ use regex::Regex;
 use reqwest::header;
 use reqwest::{Client, Error};
 use scraper::{Html, Selector};
+use std::cell::RefCell;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
@@ -17,29 +19,73 @@ const USER_AGENT: &str = concat!(
     "Chrome/81.0.4044.138 ",
     "Safari/537.36 Edg/81.0.416.72",
 );
-const TIMEOUT: u64 = 15;
+const TIMEOUT: u64 = 60;
 const RETRY: usize = 1;
 const RELOAD: usize = 1;
 const CONCURRENCY: usize = 5;
+
+const DEFAULT_TITLE_SELECTOR: &str = "#gn";
+const JAPANESE_TITLE_SELECTOR: &str = "#gj";
 const PAGE_NUM_SELECTOR: &str = "#asm + div td:nth-last-child(2) > a";
 const IMAGE_PAGE_SELECTOR: &str = "#gdt a";
+const FILE_NAME_EXTENSION_REGEX: &str = r"\.[^\.]+?$";
 const IMAGE_SELECTOR: &str = "#img";
 const RELOAD_SELECTOR: &str = "#loadfail";
 const RELOAD_REGEX: &str = r"return (.+?)\('(.+?)'\)";
 
-type ID = String;
+struct Progress {
+    title: RefCell<String>,
+    done: RefCell<usize>,
+    total: RefCell<usize>,
+}
+
+impl Display for Progress {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(
+            f,
+            "{} => {}/{}",
+            self.title.borrow(),
+            self.done.borrow(),
+            self.total.borrow()
+        )
+    }
+}
+
+impl Progress {
+    fn new() -> Self {
+        Progress {
+            title: RefCell::new("_".to_string()),
+            done: RefCell::new(0),
+            total: RefCell::new(0),
+        }
+    }
+
+    fn set_title(&self, title: &str) {
+        *self.title.borrow_mut() = title.to_string();
+    }
+
+    fn set_total(&self, total: usize) {
+        *self.total.borrow_mut() = total;
+    }
+
+    fn make_progress(&self) {
+        *self.done.borrow_mut() += 1;
+    }
+
+    fn show_progress(&self) {
+        print!("\r{}", self);
+        io::stdout().flush().unwrap();
+    }
+}
 
 pub struct Crawler {
     client: Client,
     semaphore: Semaphore,
-    id_counter: usize,
+    progress: Progress,
 }
 
 impl Crawler {
     pub fn new(credential: Credential) -> Self {
-        let semaphore = Semaphore::new(CONCURRENCY);
-
-        // We use these two cookies to log into the ExHentai.
         let cookie = format!(
             "ipb_member_id={}; ipb_pass_hash={}",
             credential.ipb_member_id, credential.ipb_pass_hash
@@ -55,287 +101,276 @@ impl Crawler {
             .timeout(Duration::new(TIMEOUT, 0))
             .build()
             .unwrap();
-
         Crawler {
             client,
-            semaphore,
-            id_counter: 0,
+            semaphore: Semaphore::new(CONCURRENCY),
+            progress: Progress::new(),
         }
     }
 
-    pub fn crawl(&mut self, url: &str, start: Option<u16>, end: Option<u16>) -> ID {
-        let id = self.id_counter.to_string();
-        self.id_counter += 1;
-        id
+    pub async fn crawl(&self, url: &str, start: Option<usize>, end: Option<usize>) {
+        // Request the first index page, determine the number of index pages,
+        // and extract urls to image pages.
+        let page = match self.request_page(url, &Vec::new()).await {
+            Ok(page) => page,
+            Err(err) => panic!("Fail to request index page 1: {}", err),
+        };
+        let title = self.extract_title(&page).unwrap();
+        let page_num = self.extract_page_num(&page).unwrap();
+        let mut image_page_urls = self.extract_image_page_urls(&page).unwrap();
+        self.progress.set_title(&title);
+        self.progress.show_progress();
+
+        // Request other index pages and extract urls to image pages.
+        for num in 1..page_num {
+            let result = self
+                .request_page(&url, &[(String::from("p"), format!("{}", num))])
+                .await;
+            let page = match result {
+                Ok(page) => page,
+                Err(err) => panic!("Fail to request index page {}: {}", num + 1, err),
+            };
+            let urls = self.extract_image_page_urls(&page).unwrap();
+            image_page_urls.extend(urls);
+        }
+
+        // Select the appropriate range that we want to crawl.
+        let len = image_page_urls.len();
+        let range = match (start, end) {
+            (Some(start), Some(end)) => {
+                if start > end || end > len {
+                    panic!("Invalid range.");
+                }
+                start - 1..end
+            }
+            (Some(start), None) => {
+                if start > len {
+                    panic!("Invalid range.");
+                }
+                start - 1..len
+            }
+            (None, Some(end)) => {
+                if end > len {
+                    panic!("Invalid range.");
+                }
+                0..end
+            }
+            (None, None) => 0..len,
+        };
+        let mut images: Vec<_> = image_page_urls[range]
+            .iter()
+            .enumerate()
+            .map(|(i, url)| (i, url, false, Vec::new()))
+            .collect();
+        self.progress.set_total(images.len());
+        self.progress.show_progress();
+
+        // Create the gallery directory.
+        let path = PathBuf::from(format!("{}/{}", PATH, title));
+        fs::create_dir(&path)
+            .map_err(|err| format!("Fail to create the gallery directory: {}", err))
+            .unwrap();
+
+        // Enter the main crawling loop.
+        for _ in 0..=RELOAD {
+            let futures = images
+                .iter_mut()
+                .map(|(num, url, crawled, query)| self._crawl(num, url, crawled, query, &path));
+            future::join_all(futures).await;
+        }
+
+        // Print failed images.
+        let failed_images: Vec<_> = images
+            .iter()
+            .filter(|(_, _, crawled, _)| !*crawled)
+            .collect();
+        if !failed_images.is_empty() {
+            println!();
+            println!("Fail to crawl the following images:");
+            let mut buffer = String::new();
+            for (num, _, _, _) in failed_images {
+                buffer.push_str(&format!("{}, ", num+1));
+            }
+            buffer.pop();
+            buffer.pop();
+            println!("{}", buffer);
+        }
     }
 
-    pub fn status(&self, id: Option<&str>) -> String {
-        todo!()
+    async fn request_page(&self, url: &str, query: &[(String, String)]) -> Result<String, Error> {
+        let _ = self.semaphore.acquire().await;
+        let mut retry = 0;
+        loop {
+            let result = self._request_page(url, query).await;
+            match result {
+                Ok(page) => {
+                    return Ok(page);
+                }
+                Err(err) if retry == RETRY => {
+                    return Err(err);
+                }
+                Err(_) => {
+                    retry += 1;
+                }
+            }
+        }
     }
 
-    pub fn cancel(&self, id: &str) {}
+    async fn _request_page(&self, url: &str, query: &[(String, String)]) -> Result<String, Error> {
+        self.client.get(url).query(query).send().await?.text().await
+    }
 
-    // async fn crawl(
-    //     &self,
-    //     artist: &str,
-    //     title: &str,
-    //     url: &str,
-    //     start: Option<u16>,
-    //     end: Option<u16>,
-    // ) -> Result<Vec<usize>, DisplayableError> {
-    //     // Request the first index page, determine the number of index pages,
-    //     // and extract urls to image pages.
-    //     let page = self.request_page(url, &Vec::new()).await?;
-    //     let page_num = self.extract_page_num(&page)?;
-    //     let mut image_page_urls = self.extract_image_page_urls(&page)?;
-    //     info!("Find {} index page(s).", page_num);
+    fn extract_title(&self, page: &str) -> Result<String, String> {
+        let document = Html::parse_document(page);
+        let japanese_title_selector = Selector::parse(JAPANESE_TITLE_SELECTOR).unwrap();
+        let japanese_title = document
+            .select(&japanese_title_selector)
+            .next()
+            .ok_or_else(|| String::from("Fail to locate the Japanese title."))?
+            .inner_html();
+        if japanese_title.is_empty() {
+            let default_title_selector = Selector::parse(DEFAULT_TITLE_SELECTOR).unwrap();
+            let default_title = document
+                .select(&default_title_selector)
+                .next()
+                .ok_or_else(|| String::from("Fail to locate the default title."))?
+                .inner_html();
+            Ok(default_title)
+        } else {
+            Ok(japanese_title)
+        }
+    }
 
-    //     // Request other index pages and extract urls to image pages.
-    //     for num in 1..page_num {
-    //         let page = self
-    //             .request_page(&url, &[(String::from("p"), format!("{}", num))])
-    //             .await?;
-    //         let urls = self.extract_image_page_urls(&page)?;
-    //         image_page_urls.extend(urls);
-    //     }
-    //     info!("Find {} image(s).", image_page_urls.len());
+    fn extract_page_num(&self, page: &str) -> Result<u16, String> {
+        let document = Html::parse_document(page);
+        let selector = Selector::parse(PAGE_NUM_SELECTOR).unwrap();
+        document
+            .select(&selector)
+            .next()
+            .ok_or_else(|| String::from("Fail to locate the page number."))?
+            .inner_html()
+            .parse()
+            .map_err(|err| format!("Fail to parse the page number: {}", err))
+    }
 
-    //     // Select the appropriate range that we want to download.
-    //     if let Some(start) = start {
-    //         if start as usize > image_page_urls.len() {
-    //             return Err(DisplayableError::from("Invalid range."));
-    //         }
-    //     }
-    //     if let Some(end) = end {
-    //         if end as usize > image_page_urls.len() {
-    //             return Err(DisplayableError::from("Invalid range."));
-    //         }
-    //     }
-    //     let range = match (start, end) {
-    //         (Some(start), Some(end)) => (start - 1) as usize..end as usize,
-    //         (Some(start), None) => (start - 1) as usize..image_page_urls.len(),
-    //         (None, Some(end)) => 0..end as usize,
-    //         (None, None) => 0..image_page_urls.len(),
-    //     };
-    //     let mut images: Vec<_> = image_page_urls[range]
-    //         .iter()
-    //         .enumerate()
-    //         .map(|(i, url)| (i + 1, url, None, Vec::new()))
-    //         .collect();
-    //     info!("Select {} image(s).", images.len());
+    fn extract_image_page_urls(&self, page: &str) -> Result<Vec<String>, String> {
+        let document = Html::parse_document(page);
+        let selector = Selector::parse(IMAGE_PAGE_SELECTOR).unwrap();
+        let a_tags: Vec<_> = document.select(&selector).collect();
+        if a_tags.is_empty() {
+            Err(String::from("Fail to locate image pages urls."))
+        } else {
+            let mut urls = Vec::new();
+            for a_tag in a_tags {
+                let url = a_tag
+                    .value()
+                    .attr("href")
+                    .ok_or_else(|| String::from("No `href` in links to image pages."))?
+                    .to_string();
+                urls.push(url);
+            }
+            Ok(urls)
+        }
+    }
 
-    //     // Create the gallery directory.
-    //     let path = PathBuf::from(format!("{}/[{}] {}", PATH, artist, title));
-    //     fs::create_dir(&path)
-    //         .map_err(|err| format!("Can not create the gallery directory: {}", err))?;
+    fn build_file_name(&self, image_num: &usize, url: &str) -> String {
+        let re = Regex::new(FILE_NAME_EXTENSION_REGEX).unwrap();
+        let caps = re
+            .captures(url)
+            .ok_or_else(|| format!("Invalid file name extension: {}", url))
+            .unwrap();
+        format!("{:0>4}{}", image_num + 1, caps[0].to_string())
+    }
 
-    //     // Enter the main downloading loop.
-    //     for reload in 0..=RELOAD {
-    //         let futures = images
-    //             .iter_mut()
-    //             .map(|(i, u, b, q)| self._crawl(i, u, b, q, reload));
-    //         let results = future::join_all(futures).await;
-    //         for result in results {
-    //             result?;
-    //         }
-    //     }
+    async fn _crawl(
+        &self,
+        num: &usize,
+        url: &str,
+        crawled: &mut bool,
+        query: &mut Vec<(String, String)>,
+        path: &Path,
+    ) {
+        // Return imediately if this image has been crawled.
+        if *crawled {
+            return;
+        }
 
-    //     // Write images to the local disk and return failed images.
-    //     let mut failed_images = Vec::new();
-    //     for (image_num, _, bytes, _) in images {
-    //         if let Some(bytes) = bytes {
-    //             let filename = format!("{}.jpg", image_num);
-    //             let mut file = fs::File::create(path.join(filename))?;
-    //             file.write_all(&bytes)?;
-    //         } else {
-    //             failed_images.push(image_num);
-    //         }
-    //     }
-    //     Ok(failed_images)
-    // }
+        // Request for the image page.
+        let result = self.request_page(url, query).await;
+        let page = match result {
+            Ok(page) => page,
+            Err(_) => return,
+        };
+        let (image_url, new_query) = self.extract_image_urls(&page).unwrap();
+        query.push(new_query);
 
-    // async fn _crawl(
-    //     &self,
-    //     image_num: &usize,
-    //     url: &str,
-    //     bytes: &mut Option<Vec<u8>>,
-    //     query: &mut Vec<(String, String)>,
-    //     reload: usize,
-    // ) -> Result<(), DisplayableError> {
-    //     // Return if this image has been downloaded.
-    //     if bytes.is_some() {
-    //         return Ok(());
-    //     }
+        // Crawl the image.
+        let result = self.request_image(&image_url).await;
+        if let Ok(image) = result {
+            let file_name = self.build_file_name(num, &image_url);
+            let mut file = fs::File::create(path.join(file_name))
+                .map_err(|err| format!("Fail to create the image file: {}", err))
+                .unwrap();
+            file.write_all(&image).expect("Fail to write the image.");
+            *crawled = true;
+            self.progress.make_progress();
+            self.progress.show_progress();
+        }
+    }
 
-    //     // Request for image pages.
-    //     let result = self.request_page(url, query).await;
-    //     let page = if let Ok(page) = result {
-    //         page
-    //     } else {
-    //         return Ok(());
-    //     };
-    //     let (image_url, new_query) = self.extract_image_urls(&page)?;
-    //     query.push(new_query);
+    fn extract_image_urls(&self, page: &str) -> Result<(String, (String, String)), String> {
+        let document = Html::parse_document(&page);
 
-    //     // Download images.
-    //     let result = self.request_image(&image_url).await;
-    //     let mut status = "fails";
-    //     if let Ok(image) = result {
-    //         *bytes = Some(image);
-    //         status = "succeeds";
-    //     }
+        // Extract the image url.
+        let image_selector = Selector::parse(IMAGE_SELECTOR).unwrap();
+        let image_url = document
+            .select(&image_selector)
+            .next()
+            .ok_or_else(|| String::from("Fail to locate the image."))?
+            .value()
+            .attr("src")
+            .ok_or_else(|| String::from("No `src` in the link to the image."))
+            .map(|attr| attr.to_string())?;
 
-    //     // Print the log.
-    //     if reload == 0 {
-    //         info!("Downloading image {} {}.", image_num, status);
-    //     } else {
-    //         info!(
-    //             "Downloading image {} (reload {}) {}.",
-    //             image_num, reload, status
-    //         );
-    //     }
+        // Extract the reload parameters.
+        let reload_selector = Selector::parse(RELOAD_SELECTOR).unwrap();
+        let reload_fn = document
+            .select(&reload_selector)
+            .next()
+            .ok_or_else(|| String::from("Fail to locate the reloading function."))?
+            .value()
+            .attr("onclick")
+            .ok_or_else(|| String::from("No `onclick` in the reloading function."))
+            .map(|attr| attr.to_string())?;
+        let re = Regex::new(RELOAD_REGEX).unwrap();
+        let caps = re
+            .captures(&reload_fn)
+            .ok_or_else(|| format!("Invalid reloading function: {}", reload_fn))?;
 
-    //     Ok(())
-    // }
+        Ok((image_url, (caps[1].to_string(), caps[2].to_string())))
+    }
 
-    // async fn request_page(&self, url: &str, query: &[(String, String)]) -> Result<String, Error> {
-    //     let _ = self.semaphore.acquire().await;
-    //     let mut retry = 0;
-    //     loop {
-    //         let result = self._request_page(url, query).await;
-    //         match result {
-    //             Ok(page) => {
-    //                 if retry == 0 {
-    //                     debug!("Requesting page `{}` succeeds.", url);
-    //                 } else {
-    //                     debug!("Requesting page `{} (retry {}) succeeds.", url, retry);
-    //                 }
-    //                 return Ok(page);
-    //             }
-    //             Err(err) if retry == RETRY => {
-    //                 if retry == 0 {
-    //                     debug!("Requesting page `{}` fails.", url);
-    //                 } else {
-    //                     debug!("Requesting page `{} (retry {}) fails.", url, retry);
-    //                 }
-    //                 return Err(err);
-    //             }
-    //             Err(_) => {
-    //                 if retry == 0 {
-    //                     debug!("Requesting page `{}` fails.", url);
-    //                 } else {
-    //                     debug!("Requesting page `{} (retry {}) fails.", url, retry);
-    //                 }
-    //                 retry += 1;
-    //             }
-    //         }
-    //     }
-    // }
+    async fn request_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let _ = self.semaphore.acquire().await;
+        let mut retry = 0;
+        loop {
+            let result = self._request_image(url).await;
+            match result {
+                Ok(image) => {
+                    return Ok(image);
+                }
+                Err(err) if retry == RETRY => {
+                    return Err(err);
+                }
+                Err(_) => {
+                    retry += 1;
+                }
+            }
+        }
+    }
 
-    // async fn _request_page(&self, url: &str, query: &[(String, String)]) -> Result<String, Error> {
-    //     self.client.get(url).query(query).send().await?.text().await
-    // }
-
-    // fn extract_page_num(&self, page: &str) -> Result<u16, String> {
-    //     let document = Html::parse_document(page);
-    //     let selector = Selector::parse(PAGE_NUM_SELECTOR).unwrap();
-    //     document
-    //         .select(&selector)
-    //         .next()
-    //         .ok_or_else(|| String::from("Can not find the page number."))?
-    //         .inner_html()
-    //         .parse()
-    //         .map_err(|err| format!("Can not parse the page number: {}", err))
-    // }
-
-    // fn extract_image_page_urls(&self, page: &str) -> Result<Vec<String>, String> {
-    //     let document = Html::parse_document(page);
-    //     let selector = Selector::parse(IMAGE_PAGE_SELECTOR).unwrap();
-    //     let a_tags: Vec<_> = document.select(&selector).collect();
-    //     if a_tags.is_empty() {
-    //         Err(String::from("Can not find image pages urls."))
-    //     } else {
-    //         let mut urls = Vec::new();
-    //         for a_tag in a_tags {
-    //             let url = a_tag
-    //                 .value()
-    //                 .attr("href")
-    //                 .ok_or_else(|| String::from("No `href` in links to image pages."))?
-    //                 .to_string();
-    //             urls.push(url);
-    //         }
-    //         Ok(urls)
-    //     }
-    // }
-
-    // fn extract_image_urls(&self, page: &str) -> Result<(String, (String, String)), String> {
-    //     let document = Html::parse_document(&page);
-
-    //     // Extract image urls.
-    //     let image_selector = Selector::parse(IMAGE_SELECTOR).unwrap();
-    //     let image_url = document
-    //         .select(&image_selector)
-    //         .next()
-    //         .ok_or_else(|| String::from("Can not find the image."))?
-    //         .value()
-    //         .attr("src")
-    //         .ok_or_else(|| String::from("No `src` in the link to the image."))
-    //         .map(|attr| attr.to_string())?;
-
-    //     // Extract reload parameters.
-    //     let reload_selector = Selector::parse(RELOAD_SELECTOR).unwrap();
-    //     let reload_fn = document
-    //         .select(&reload_selector)
-    //         .next()
-    //         .ok_or_else(|| String::from("Can not find the reloading function."))?
-    //         .value()
-    //         .attr("onclick")
-    //         .ok_or_else(|| String::from("No `onclick` in the reloading function."))
-    //         .map(|attr| attr.to_string())?;
-    //     let re = Regex::new(RELOAD_REGEX).unwrap();
-    //     let caps = re
-    //         .captures(&reload_fn)
-    //         .ok_or_else(|| format!("Invalid reloading function: {}", reload_fn))?;
-
-    //     Ok((image_url, (caps[1].to_string(), caps[2].to_string())))
-    // }
-
-    // async fn request_image(&self, url: &str) -> Result<Vec<u8>, Error> {
-    //     let _ = self.semaphore.acquire().await;
-    //     let mut retry = 0;
-    //     loop {
-    //         let result = self._request_image(url).await;
-    //         match result {
-    //             Ok(image) => {
-    //                 if retry == 0 {
-    //                     debug!("Requesting image `{}` succeeds.", url);
-    //                 } else {
-    //                     debug!("Requesting image `{} (retry {}) succeeds.", url, retry);
-    //                 }
-    //                 return Ok(image);
-    //             }
-    //             Err(err) if retry == RETRY => {
-    //                 if retry == 0 {
-    //                     debug!("Requesting image `{}` fails.", url);
-    //                 } else {
-    //                     debug!("Requesting image `{} (retry {}) fails.", url, retry);
-    //                 }
-    //                 return Err(err);
-    //             }
-    //             Err(_) => {
-    //                 if retry == 0 {
-    //                     debug!("Requesting image `{}` fails.", url);
-    //                 } else {
-    //                     debug!("Requesting image `{} (retry {}) fails.", url, retry);
-    //                 }
-    //                 retry += 1;
-    //             }
-    //         }
-    //     }
-    // }
-
-    // async fn _request_image(&self, url: &str) -> Result<Vec<u8>, Error> {
-    //     let bytes = self.client.get(url).send().await?.bytes().await?;
-    //     Ok(bytes.into_iter().collect())
-    // }
+    async fn _request_image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let bytes = self.client.get(url).send().await?.bytes().await?;
+        Ok(bytes.into_iter().collect())
+    }
 }
