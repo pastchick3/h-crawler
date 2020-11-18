@@ -166,6 +166,7 @@ impl Crawler {
         self.progress.show_progress();
 
         // Create the gallery directory.
+        let title = sanitize_filename::sanitize(title);
         let path = PathBuf::from(format!("{}/{}", PATH, title));
         fs::create_dir(&path)
             .map_err(|err| format!("Fail to create the gallery directory: {}", err))
