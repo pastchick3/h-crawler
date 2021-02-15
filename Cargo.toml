@@ -1,6 +1,6 @@
 [package]
 name = "eh-crawler"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["pastchick3 <331604390@qq.com>"]
 edition = "2018"
 
@@ -9,11 +9,12 @@ edition = "2018"
 [dependencies]
 structopt = "0.3"
 toml = "0.5"
-serde = "1"
-serde_derive = "1"
-tokio = { version = "0.2", features = ["full"] }
-reqwest = "0.10"
+serde = "1.0"
+serde_derive = "1.0"
+tokio = { version = "1.2", features = ["full"] }
+reqwest = "0.11"
 scraper = "0.12"
-futures = "0.3"
 regex = "1.4"
 sanitize-filename = "0.3"
+futures = "0.3"
+lazy_static = "1.4"
