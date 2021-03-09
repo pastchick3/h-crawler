@@ -9,7 +9,7 @@ use std::fs;
 use structopt::StructOpt;
 
 const EH_CREDENTIAL: &str = "./eh-credential";
-const EH_BASE_URL: &str = "https://exhentai.org/g/";
+const EH_BASE_URL: &str = "https://exhentai.org/g";
 
 #[derive(Deserialize)]
 pub struct Credential {
