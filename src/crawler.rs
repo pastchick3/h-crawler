@@ -19,7 +19,7 @@ const USER_AGENT: &str = concat!(
     "Chrome/81.0.4044.138 ",
     "Safari/537.36 Edg/81.0.416.72",
 );
-const TIMEOUT: u64 = 60;
+const TIMEOUT: u64 = 180;
 const RETRY: usize = 1;
 const RELOAD: usize = 1;
 const CONCURRENCY: usize = 5;

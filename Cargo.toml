@@ -1,6 +1,6 @@
 [package]
 name = "eh-crawler"
-version = "0.4.1"
+version = "0.4.2"
 authors = ["pastchick3 <331604390@qq.com>"]
 edition = "2018"
 
