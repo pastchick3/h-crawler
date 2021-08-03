@@ -21,6 +21,9 @@ pub struct Credential {
 #[structopt(name = "eh-crawler")]
 struct Opt {
     galleries: Vec<String>,
+
+    #[structopt(short, long)]
+    verbose: bool,
 }
 
 #[tokio::main]
@@ -29,6 +32,7 @@ async fn main() {
     let credential: Credential = toml::from_str(&credential_str).unwrap();
 
     let opt = Opt::from_args();
+
     let mut galleries = Vec::new();
     for gallery in opt.galleries {
         let parts: Vec<_> = gallery.split('/').collect();
@@ -37,7 +41,7 @@ async fn main() {
         }
         let url = format!("{}/{}/{}/", EH_BASE_URL, parts[0], parts[1]);
         let range = match parts[2] {
-            "" => (None, None),
+            "" => None,
             range => {
                 let range: Vec<_> = range.split('-').collect();
                 if range.len() != 2 {
@@ -45,12 +49,14 @@ async fn main() {
                 }
                 let start = range[0].parse().unwrap();
                 let end = range[1].parse().unwrap();
-                (Some(start), Some(end))
+                Some((start, end))
             }
         };
         galleries.push((url, range));
     }
 
-    let mut crawler = Crawler::new(credential);
-    crawler.crawl(galleries).await;
+    let mut crawler = Crawler::new(credential, opt.verbose);
+    for gallery in galleries {
+        crawler.crawl(gallery).await;
+    }
 }

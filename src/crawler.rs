@@ -19,20 +19,21 @@ const USER_AGENT: &str = concat!(
     "Chrome/81.0.4044.138 ",
     "Safari/537.36 Edg/81.0.416.72",
 );
-const TIMEOUT: u64 = 180;
+const TIMEOUT: u64 = 60;
 const RETRY: usize = 1;
 const RELOAD: usize = 1;
 const CONCURRENCY: usize = 5;
 
 lazy_static! {
-    static ref JAPANESE_TITLE_SELECTOR: Selector = Selector::parse("#gj").unwrap();
-    static ref DEFAULT_TITLE_SELECTOR: Selector = Selector::parse("#gn").unwrap();
-    static ref PAGE_NUM_SELECTOR: Selector =
-        Selector::parse("#asm + div td:nth-last-child(2) > a").unwrap();
-    static ref IMAGE_PAGE_SELECTOR: Selector = Selector::parse("#gdt a").unwrap();
-    static ref FILE_NAME_EXTENSION_REGEX: Regex = Regex::new(r"\.[^\.]+?$").unwrap();
-    static ref IMAGE_SELECTOR: Selector = Selector::parse("#img").unwrap();
-    static ref RELOAD_SELECTOR: Selector = Selector::parse("#loadfail").unwrap();
+    static ref JAPANESE_TITLE_SELECTOR: Selector = Selector::parse(r"#gj").unwrap();
+    static ref DEFAULT_TITLE_SELECTOR: Selector = Selector::parse(r"#gn").unwrap();
+    static ref IMAGE_COUNT_SELECTOR: Selector =
+        Selector::parse(r"#gdd tr:nth-child(6) td:nth-child(2)").unwrap();
+    static ref IMAGE_COUNT_REGEX: Regex = Regex::new(r"(\d+) .+").unwrap();
+    static ref IMAGE_PAGE_SELECTOR: Selector = Selector::parse(r"#gdt a").unwrap();
+    static ref IMAGE_SELECTOR: Selector = Selector::parse(r"#img").unwrap();
+    static ref FILE_EXTENSION_REGEX: Regex = Regex::new(r"\.[^\.]+?$").unwrap();
+    static ref RELOAD_SELECTOR: Selector = Selector::parse(r"#loadfail").unwrap();
     static ref RELOAD_REGEX: Regex = Regex::new(r"return (.+?)\('(.+?)'\)").unwrap();
 }
 
@@ -49,42 +50,33 @@ impl Display for Progress {
 }
 
 impl Progress {
-    fn new() -> Self {
+    fn new(title: &str, total: usize) -> Self {
         Progress {
-            title: String::from("_"),
+            title: title.to_string(),
             done: RefCell::new(0),
-            total: 0,
+            total,
         }
-    }
-
-    fn set_title(&mut self, title: &str) {
-        self.title = title.to_string();
-    }
-
-    fn set_total(&mut self, total: usize) {
-        self.total = total;
     }
 
     fn make_progress(&self) {
         *self.done.borrow_mut() += 1;
     }
 
-    fn show_progress(&self) {
+    fn print_progress(&self) {
         print!("\r{}", self);
         io::stdout().flush().unwrap();
     }
 }
 
-type Gallery = (String, (Option<usize>, Option<usize>));
-
 pub struct Crawler {
     client: Client,
     semaphore: Semaphore,
     progress: Progress,
+    verbose: bool,
 }
 
 impl Crawler {
-    pub fn new(credential: Credential) -> Self {
+    pub fn new(credential: Credential, verbose: bool) -> Self {
         let cookie = format!(
             "ipb_member_id={}; ipb_pass_hash={}",
             credential.ipb_member_id, credential.ipb_pass_hash
@@ -94,132 +86,164 @@ impl Crawler {
             header::COOKIE,
             header::HeaderValue::from_str(&cookie).unwrap(),
         );
+
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .user_agent(USER_AGENT)
             .timeout(Duration::new(TIMEOUT, 0))
             .build()
             .unwrap();
+
         Crawler {
             client,
             semaphore: Semaphore::new(CONCURRENCY),
-            progress: Progress::new(),
+            progress: Progress::new("EH Crawler", 0),
+            verbose,
         }
     }
 
-    pub async fn crawl(&mut self, galleries: Vec<Gallery>) {
-        for (url, (start, end)) in galleries {
-            // Reset the progress.
-            self.progress = Progress::new();
+    pub async fn crawl(&mut self, (url, range): (String, Option<(usize, usize)>)) {
+        // Crawl the home page and extract some basic information.
+        let page = match self.request_page(&url, Vec::new()).await {
+            Ok(page) => page,
+            Err(err) => {
+                eprintln!("Fail to request the index page 1 for `{}`: {}", url, err);
+                return;
+            }
+        };
+        let document = Html::parse_document(&page);
+        let title = self.extract_title(&document).unwrap();
+        let image_count = self.extract_image_count(&document).unwrap();
 
-            // Request the first index page, determine the number of index pages,
-            // and extract urls to image pages.
-            let page = match self.request_page(&url, Vec::new()).await {
-                Ok(resp) => resp.text().await.unwrap(),
+        // Determine a proper range.
+        let (start, end) = match range {
+            Some((start, end)) => (start, end),
+            None => (1, image_count),
+        };
+
+        self.progress = Progress::new(&title, end - start + 1);
+        if !self.verbose {
+            self.progress.print_progress();
+        }
+
+        let start_page = start / 20;
+        let start = start % 20 - 1;
+        let end_page = end / 20;
+        let end = (end_page - start_page) * 20 + end % 20;
+
+        if self.verbose {
+            eprintln!(
+                "Crawl `{}` from {}:{} to {}:{} at `{}`.",
+                title, start_page, start, end_page, end, url
+            );
+        }
+
+        // Crawl index pages and extract links to image pages.
+        let mut image_page_urls = Vec::new();
+        let futures = (start_page..=end_page)
+            .into_iter()
+            .map(|p| self.request_page(&url, vec![("p".to_string(), p.to_string())]));
+        let results = future::join_all(futures).await;
+        for (p, result) in results.into_iter().enumerate() {
+            let page = match result {
+                Ok(page) => page,
                 Err(err) => {
-                    eprintln!("Fail to request the index page 1 at `{}`: {}", url, err);
-                    continue;
+                    eprintln!(
+                        "Fail to request the index page {} for `{}`: {}",
+                        p + 1,
+                        url,
+                        err
+                    );
+                    return;
                 }
             };
             let document = Html::parse_document(&page);
-            let title = self.extract_title(&document).unwrap();
-            let page_num = self.extract_page_num(&document).unwrap();
-            let mut image_page_urls = self.extract_image_page_urls(&document).unwrap();
-            self.progress.set_title(&title);
-            self.progress.show_progress();
+            let urls = self.extract_image_page_urls(&document).unwrap();
+            image_page_urls.extend(urls);
+        }
 
-            // Request other index pages and extract urls to image pages.
-            let futures = (1..page_num)
-                .into_iter()
-                .map(|p| self.request_page(&url, vec![("p".to_string(), p.to_string())]));
-            let results = future::join_all(futures).await;
-            let mut failed = false;
-            for (p, result) in results.into_iter().enumerate() {
-                let page = match result {
-                    Ok(resp) => resp.text().await.unwrap(),
-                    Err(err) => {
-                        eprintln!("Fail to request index page {}: {}", p + 1, err);
-                        failed = true;
-                        break;
-                    }
-                };
-                let document = Html::parse_document(&page);
-                let urls = self.extract_image_page_urls(&document).unwrap();
-                image_page_urls.extend(urls);
-            }
-            if failed {
-                continue;
-            }
+        // Create the gallery directory.
+        let title = sanitize_filename::sanitize(title);
+        let path = PathBuf::from(format!("{}/{}", PATH, title));
+        fs::create_dir(&path)
+            .map_err(|err| {
+                format!(
+                    "Fail to create the gallery directory for `{}`: {}",
+                    title, err
+                )
+            })
+            .unwrap();
 
-            // Select the appropriate range that we want to crawl.
-            let len = image_page_urls.len();
-            let range = match (start, end) {
-                (Some(start), Some(end)) if start <= end && end <= len => start - 1..end,
-                (None, None) => 0..len,
-                _ => {
-                    eprintln!("Invalid range `{:?}-{:?}`.", start, end);
-                    continue;
-                }
-            };
-            let mut images: Vec<_> = image_page_urls[range]
-                .iter()
-                .enumerate()
-                .map(|(i, url)| (i, url, false, Vec::new()))
-                .collect();
-            self.progress.set_total(images.len());
-            self.progress.show_progress();
-
-            // Create the gallery directory.
-            let title = sanitize_filename::sanitize(title);
-            let path = PathBuf::from(format!("{}/{}", PATH, title));
-            fs::create_dir(&path)
-                .map_err(|err| format!("Fail to create the gallery directory: {}", err))
-                .unwrap();
-
-            // Enter the main crawling loop.
-            for _ in 0..=RELOAD {
-                let futures = images
-                    .iter_mut()
-                    .filter(|(_, _, crawled, _)| !*crawled)
-                    .map(|(i, url, crawled, query)| {
-                        self.crawl_image(i, url, crawled, query, &path)
-                    });
-                future::join_all(futures).await;
-            }
-
-            // Print failed images.
-            let failed_images: Vec<_> = images
-                .iter()
+        // Crawl image pages and images.
+        let mut image_pages: Vec<_> = image_page_urls[start..end]
+            .iter()
+            .enumerate()
+            .map(|(i, url)| (i, url, false, Vec::new()))
+            .collect();
+        for _ in 0..=RELOAD {
+            let futures = image_pages
+                .iter_mut()
                 .filter(|(_, _, crawled, _)| !*crawled)
-                .collect();
+                .map(|(i, url, crawled, query)| self.crawl_image(i, url, crawled, query, &path));
+            future::join_all(futures).await;
+        }
+
+        // Print failed images.
+        if !self.verbose {
             println!();
-            if !failed_images.is_empty() {
-                println!("Fail to crawl the following images:");
-                let mut buffer = String::new();
-                for (num, _, _, _) in failed_images {
-                    buffer.push_str(&format!("{}, ", num + 1));
-                }
-                buffer.pop();
-                buffer.pop();
-                println!("{}", buffer);
+        }
+        let failed_images: Vec<_> = image_pages
+            .iter()
+            .filter(|(_, _, crawled, _)| !*crawled)
+            .collect();
+        if !failed_images.is_empty() {
+            println!("Fail to crawl the following images:");
+            let mut buffer = String::new();
+            for (i, _, _, _) in failed_images {
+                buffer.push_str(&format!("{}, ", i + 1));
             }
+            buffer.pop();
+            buffer.pop();
+            println!("{}", buffer);
         }
     }
 
-    async fn request_page(
+    async fn request_page(&self, url: &str, query: Vec<(String, String)>) -> Result<String, Error> {
+        match self.request_url(url, query).await {
+            Ok(resp) => Ok(resp.text().await.unwrap()),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn request_url(
         &self,
         url: &str,
         query: Vec<(String, String)>,
     ) -> Result<Response, Error> {
-        let _ = self.semaphore.acquire().await.unwrap();
+        let _permit = self.semaphore.acquire().await.unwrap();
         for r in 0..=RETRY {
             return match self.client.get(url).query(&query).send().await {
-                Ok(resp) => Ok(resp),
-                Err(err) if r == RETRY => Err(err),
-                _ => continue,
+                Ok(resp) => {
+                    if self.verbose {
+                        let req = self.client.get(url).query(&query).build().unwrap();
+                        eprintln!("Request `{}` (retry={}) succeeds.", req.url(), r);
+                    }
+                    Ok(resp)
+                }
+                Err(err) => {
+                    if self.verbose {
+                        let req = self.client.get(url).query(&query).build().unwrap();
+                        eprintln!("Request `{}` (retry={}) fails.", req.url(), r);
+                    }
+                    if r == RETRY {
+                        Err(err)
+                    } else {
+                        continue;
+                    }
+                }
             };
         }
-        unreachable!()
+        unreachable!();
     }
 
     fn extract_title(&self, document: &Html) -> Result<String, String> {
@@ -228,32 +252,37 @@ impl Crawler {
             .next()
             .ok_or("Fail to locate the Japanese title.")?
             .inner_html();
-        if !japanese_title.is_empty() {
-            Ok(japanese_title)
-        } else {
+        if japanese_title.is_empty() {
             let default_title = document
                 .select(&DEFAULT_TITLE_SELECTOR)
                 .next()
                 .ok_or("Fail to locate the default title.")?
                 .inner_html();
             Ok(default_title)
+        } else {
+            Ok(japanese_title)
         }
     }
 
-    fn extract_page_num(&self, document: &Html) -> Result<u16, String> {
-        document
-            .select(&PAGE_NUM_SELECTOR)
+    fn extract_image_count(&self, document: &Html) -> Result<usize, String> {
+        let length_field = document
+            .select(&IMAGE_COUNT_SELECTOR)
             .next()
-            .ok_or("Fail to locate the page number.")?
-            .inner_html()
+            .ok_or("Fail to locate the image count.")?
+            .inner_html();
+        let caps = IMAGE_COUNT_REGEX
+            .captures(&length_field)
+            .ok_or(format!("Invalid image count `{}`.", length_field))?;
+        caps[1]
+            .to_string()
             .parse()
-            .map_err(|err| format!("Fail to parse the page number: {}", err))
+            .map_err(|err| format!("Fail to parse the image count: {}", err))
     }
 
     fn extract_image_page_urls(&self, document: &Html) -> Result<Vec<String>, String> {
         let a_tags: Vec<_> = document.select(&IMAGE_PAGE_SELECTOR).collect();
         if a_tags.is_empty() {
-            Err("Fail to locate image pages urls.".into())
+            Err(String::from("Fail to locate image pages urls."))
         } else {
             let mut urls = Vec::new();
             for a_tag in a_tags {
@@ -276,10 +305,9 @@ impl Crawler {
         query: &mut Vec<(String, String)>,
         path: &Path,
     ) {
-        // Request the image page.
-        let result = self.request_page(url, query.to_vec()).await;
-        let page = match result {
-            Ok(resp) => resp.text().await.unwrap(),
+        // Crawl the image page.
+        let page = match self.request_page(url, query.to_vec()).await {
+            Ok(page) => page,
             Err(_) => return,
         };
         let document = Html::parse_document(&page);
@@ -287,7 +315,7 @@ impl Crawler {
         query.push(new_query);
 
         // Crawl the image.
-        if let Ok(resp) = self.request_page(&image_url, Vec::new()).await {
+        if let Ok(resp) = self.request_url(&image_url, Vec::new()).await {
             if let Ok(image) = resp.bytes().await {
                 let file_name = self.build_file_name(i, &image_url);
                 let mut file = fs::File::create(path.join(file_name))
@@ -296,7 +324,9 @@ impl Crawler {
                 file.write_all(&image).expect("Fail to write the image.");
                 *crawled = true;
                 self.progress.make_progress();
-                self.progress.show_progress();
+                if !self.verbose {
+                    self.progress.print_progress();
+                }
             }
         }
     }
@@ -329,9 +359,9 @@ impl Crawler {
     }
 
     fn build_file_name(&self, i: &usize, url: &str) -> String {
-        let caps = FILE_NAME_EXTENSION_REGEX
+        let caps = FILE_EXTENSION_REGEX
             .captures(url)
-            .ok_or(format!("Invalid file name extension: {}", url))
+            .ok_or(format!("Invalid file extension: {}", url))
             .unwrap();
         format!("{:0>4}{}", i + 1, &caps[0])
     }
