@@ -117,17 +117,17 @@ impl Crawler {
 
         // Determine a proper range.
         let (start, end) = match range {
-            Some((start, end)) => (start, end),
-            None => (1, image_count),
+            Some((start, end)) => (start - 1, end),
+            None => (0, image_count),
         };
 
-        self.progress = Progress::new(&title, end - start + 1);
+        self.progress = Progress::new(&title, end - start);
         if !self.verbose {
             self.progress.print_progress();
         }
 
         let start_page = start / 20;
-        let start = start % 20 - 1;
+        let start = start % 20;
         let end_page = end / 20;
         let end = (end_page - start_page) * 20 + end % 20;
 
