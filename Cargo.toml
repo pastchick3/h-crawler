@@ -1,20 +1,17 @@
 [package]
-name = "eh-crawler"
-version = "0.5.1"
+name = "h-crawler"
+version = "0.6.0"
 authors = ["pastchick3 <pastchick3@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-structopt = "0.3"
-toml = "0.5"
-serde = "1.0"
-serde_derive = "1.0"
-tokio = { version = "1.9", features = ["full"] }
-reqwest = "0.11"
-scraper = "0.12"
-regex = "1.5"
-sanitize-filename = "0.3"
-futures = "0.3"
-lazy_static = "1.4"
+clap = { version = "3.1.6", features = ["derive"] }
+kuchiki = "0.8.1"
+lazy_static = "1.4.0"
+regex = "1.5.4"
+sanitize-filename = "0.3.0"
+serde_json = "1.0.79"
+toml = "0.5.8"
+ureq = "2.4.0"

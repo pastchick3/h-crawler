@@ -12,6 +12,41 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
+const EH_BASE_URL: &str = "https://exhentai.org/g";
+fn main() {
+    let credential_str = fs::read_to_string(EH_CREDENTIAL).unwrap();
+    let credential: Credential = toml::from_str(&credential_str).unwrap();
+
+    let opt = Opt::from_args();
+
+    let mut galleries = Vec::new();
+    for gallery in opt.galleries {
+        let parts: Vec<_> = gallery.split('/').collect();
+        if parts.len() != 3 {
+            panic!("Invalid gallery `{}`.", gallery);
+        }
+        let url = format!("{}/{}/{}/", EH_BASE_URL, parts[0], parts[1]);
+        let range = match parts[2] {
+            "" => None,
+            range => {
+                let range: Vec<_> = range.split('-').collect();
+                if range.len() != 2 {
+                    panic!("Invalid range `{}`.", gallery);
+                }
+                let start = range[0].parse().unwrap();
+                let end = range[1].parse().unwrap();
+                Some((start, end))
+            }
+        };
+        galleries.push((url, range));
+    }
+
+    let mut crawler = Crawler::new(credential, opt.verbose);
+    for gallery in galleries {
+        crawler.crawl(gallery).await;
+    }
+}
+
 const PATH: &str = ".";
 const USER_AGENT: &str = concat!(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ",
