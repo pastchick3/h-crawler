@@ -1,24 +1,30 @@
-use crate::Credential;
-use futures::future;
 use regex::Regex;
-use reqwest::header;
-use reqwest::{Client, Error, Response};
-use scraper::{Html, Selector};
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::sync::Semaphore;
+
+use crate::crawler::Crawler;
 
 const EH_BASE_URL: &str = "https://exhentai.org/g";
-fn main() {
-    let credential_str = fs::read_to_string(EH_CREDENTIAL).unwrap();
-    let credential: Credential = toml::from_str(&credential_str).unwrap();
 
-    let opt = Opt::from_args();
 
+lazy_static! {
+    static ref JAPANESE_TITLE_SELECTOR: Selector = Selector::parse(r"#gj").unwrap();
+    static ref DEFAULT_TITLE_SELECTOR: Selector = Selector::parse(r"#gn").unwrap();
+    static ref IMAGE_COUNT_SELECTOR: Selector =
+        Selector::parse(r"#gdd tr:nth-child(6) td:nth-child(2)").unwrap();
+    static ref IMAGE_COUNT_REGEX: Regex = Regex::new(r"(\d+) .+").unwrap();
+    static ref IMAGE_PAGE_SELECTOR: Selector = Selector::parse(r"#gdt a").unwrap();
+    static ref IMAGE_SELECTOR: Selector = Selector::parse(r"#img").unwrap();
+    static ref FILE_EXTENSION_REGEX: Regex = Regex::new(r"\.[^\.]+?$").unwrap();
+    static ref RELOAD_SELECTOR: Selector = Selector::parse(r"#loadfail").unwrap();
+    static ref RELOAD_REGEX: Regex = Regex::new(r"return (.+?)\('(.+?)'\)").unwrap();
+}
+
+pub fn crawl(crawler: Crawler, reload: usize, ipb_member_id: String, ipb_pass_hash: String, galleries: Vec<String>) {
     let mut galleries = Vec::new();
     for gallery in opt.galleries {
         let parts: Vec<_> = gallery.split('/').collect();
@@ -47,70 +53,18 @@ fn main() {
     }
 }
 
-const PATH: &str = ".";
-const USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ",
-    "AppleWebKit/537.36 (KHTML, like Gecko) ",
-    "Chrome/81.0.4044.138 ",
-    "Safari/537.36 Edg/81.0.416.72",
-);
-const TIMEOUT: u64 = 60;
-const RETRY: usize = 1;
-const RELOAD: usize = 1;
-const CONCURRENCY: usize = 5;
 
-lazy_static! {
-    static ref JAPANESE_TITLE_SELECTOR: Selector = Selector::parse(r"#gj").unwrap();
-    static ref DEFAULT_TITLE_SELECTOR: Selector = Selector::parse(r"#gn").unwrap();
-    static ref IMAGE_COUNT_SELECTOR: Selector =
-        Selector::parse(r"#gdd tr:nth-child(6) td:nth-child(2)").unwrap();
-    static ref IMAGE_COUNT_REGEX: Regex = Regex::new(r"(\d+) .+").unwrap();
-    static ref IMAGE_PAGE_SELECTOR: Selector = Selector::parse(r"#gdt a").unwrap();
-    static ref IMAGE_SELECTOR: Selector = Selector::parse(r"#img").unwrap();
-    static ref FILE_EXTENSION_REGEX: Regex = Regex::new(r"\.[^\.]+?$").unwrap();
-    static ref RELOAD_SELECTOR: Selector = Selector::parse(r"#loadfail").unwrap();
-    static ref RELOAD_REGEX: Regex = Regex::new(r"return (.+?)\('(.+?)'\)").unwrap();
-}
 
-struct Progress {
-    title: String,
-    done: RefCell<usize>,
-    total: usize,
-}
 
-impl Display for Progress {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "{} => {}/{}", self.title, self.done.borrow(), self.total)
-    }
-}
 
-impl Progress {
-    fn new(title: &str, total: usize) -> Self {
-        Progress {
-            title: title.to_string(),
-            done: RefCell::new(0),
-            total,
-        }
-    }
-
-    fn make_progress(&self) {
-        *self.done.borrow_mut() += 1;
-    }
-
-    fn print_progress(&self) {
-        print!("\r{}", self);
-        io::stdout().flush().unwrap();
-    }
-}
-
-pub struct Crawler {
+pub struct _Crawler {
     client: Client,
     semaphore: Semaphore,
     progress: Progress,
     verbose: bool,
 }
 
-impl Crawler {
+impl _Crawler {
     pub fn new(credential: Credential, verbose: bool) -> Self {
         let cookie = format!(
             "ipb_member_id={}; ipb_pass_hash={}",

@@ -1,53 +1,20 @@
-// mod crawler;
+use h_crawler::{self, Arguments, Config};
+use std::fs;
+use std::path::{Path, PathBuf};
+use log::debug;
 
-// use crawler::Crawler;
-// use serde_derive::Deserialize;
-use std::path::PathBuf;
-
-const EH_CREDENTIAL: &str = "./eh-credential";
-
-
-use clap::{Parser, Subcommand};
-
-#[derive(Parser)]
-#[clap(version)]
-struct Args {
-    /// Optional name to operate on
-    name: Option<String>,
-
-    /// Sets a custom config file
-    #[clap(short, long, parse(from_os_str), value_name = "FILE")]
-    config: Option<PathBuf>,
-
-    /// Turn debugging information on
-    #[clap(short, long, parse(from_occurrences))]
-    debug: usize,
-
-    #[clap(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// does testing things
-    Test {
-        /// lists test values
-        #[clap(short, long)]
-        list: bool,
-    },
-}
-
-
-// #[derive(Deserialize)]
-// pub struct Credential {
-//     ipb_member_id: String,
-//     ipb_pass_hash: String,
-// }
+const CONFIG: &str = "./h-config.toml";
 
 fn main() {
-    // let credential_str = fs::read_to_string(EH_CREDENTIAL).unwrap();
-    // let credential: Credential = toml::from_str(&credential_str).unwrap();
-
-    let args = Args::parse();
-
+    env_logger::init();
+    let arguments = Arguments::parse();
+    let config_path = arguments.config.unwrap_or(Path::new(CONFIG).to_path_buf());
+    let config = match fs::read_to_string(config_path) {
+        Ok(s) => toml::from_str(&s).unwrap(),
+        Err(e) => {
+            debug!("The config file is not available: {e}");
+            OptionConfig::default()
+        }
+    };
+    h_crawler::run(arguments, config);
 }
