@@ -9,7 +9,7 @@ use crawler::Crawler;
 
 const OUTPUT: &str = ".";
 const VERBOSE: bool = false;
-const TIMEOUT: usize = 15;
+const TIMEOUT: u64 = 15;
 const RETRY: usize = 1;
 const CONCURRENCY: usize = 5;
 const RELOAD: usize = 1;
@@ -18,13 +18,13 @@ const RELOAD: usize = 1;
 #[clap(version)]
 pub struct Arguments {
     #[clap(long, parse(from_os_str))]
-    config: Option<PathBuf>,
+    pub config: Option<PathBuf>,
 
     #[clap(long, parse(from_os_str))]
     output: Option<PathBuf>,
 
     #[clap(long)]
-    timeout: Option<usize>,
+    timeout: Option<u64>,
 
     #[clap(long)]
     retry: Option<usize>,
@@ -65,7 +65,7 @@ enum PixivTarget {
 #[derive(Deserialize, Default)]
 pub struct Config {
     output: Option<PathBuf>,
-    timeout: Option<usize>,
+    timeout: Option<u64>,
     retry: Option<usize>,
     concurrency: Option<usize>,
     exhentai: Option<ExhentaiConfig>,
@@ -92,7 +92,7 @@ pub fn run(arguments: Arguments, config: Config) {
             .concurrency
             .and(config.concurrency)
             .unwrap_or(CONCURRENCY);
-    let crawler = Crawler::new(output, timeout, retry, concurrency);
+    
 
 
     match arguments.website {
@@ -103,19 +103,26 @@ pub fn run(arguments: Arguments, config: Config) {
             galleries,
         }) => {
                 let reload = reload
-                    .and(config.exhentai.map(|eh| eh.reload).flatten())
-                    .unwrap_or(RELOAD);
-                let ipb_member_id = ipb_member_id.and(config.exhentai.map(|eh| eh.ipb_member_id).flatten())
-                .expect("`ipb_member_id` is not defined");
-                let ipb_pass_hash = ipb_pass_hash.and(config.exhentai.map(|eh| eh.ipb_pass_hash).flatten())
-                .expect("`ipb_pass_hash` is not defined");
-            exhentai::crawl(crawler, reload, ipb_member_id, ipb_pass_hash, galleries);
+                    .and(config.exhentai.as_ref().map(|eh| eh.reload.as_ref()).flatten())
+                    .cloned().unwrap_or(RELOAD);
+                let ipb_member_id = ipb_member_id.and(config.exhentai.as_ref().map(|eh| eh.ipb_member_id.as_ref()).flatten())
+                .expect("`ipb_member_id` is not defined").clone();
+                let ipb_pass_hash = ipb_pass_hash.and(config.exhentai.as_ref().map(|eh| eh.ipb_pass_hash.as_ref()).flatten())
+                .expect("`ipb_pass_hash` is not defined").clone();
+                let cookies = vec![
+                    (String::from("ipb_member_id"), ipb_member_id),
+                    (String::from("ipb_pass_hash"), ipb_pass_hash),
+                ];
+                let crawler = Crawler::new(timeout, retry, concurrency, cookies);
+            exhentai::crawl(crawler, output, reload, galleries);
         }
-        Some(Website::Pixiv { target }) => match target {
-            Some(PixivTarget::User { ids }) => pixiv::crawl_user(crawler, ids),
-            Some(PixivTarget::Artwork { ids }) => pixiv::crawl_artwork(crawler, ids),
+        Some(Website::Pixiv { target }) => {
+            let crawler = Crawler::new(timeout, retry, concurrency, Vec::new());
+            match target {
+            Some(PixivTarget::User { ids }) => pixiv::crawl_user(crawler, output, ids),
+            Some(PixivTarget::Artwork { ids }) => pixiv::crawl_artwork(crawler, output, ids),
             None => (),
-        },
+        }}
         None => (),
     }
 }
