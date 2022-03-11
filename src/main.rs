@@ -1,8 +1,8 @@
 use h_crawler::{self, Arguments, Config};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use log::debug;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 
 const CONFIG: &str = "./h-config.toml";
 

@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use crawler::Crawler;
 
 const OUTPUT: &str = ".";
-const VERBOSE: bool = false;
 const TIMEOUT: u64 = 15;
 const RETRY: usize = 1;
 const CONCURRENCY: usize = 5;
@@ -93,8 +92,6 @@ pub fn run(arguments: Arguments, config: Config) {
             .and(config.concurrency)
             .unwrap_or(CONCURRENCY);
     
-
-
     match arguments.website {
         Some(Website::Exhentai {
             reload,
@@ -117,10 +114,10 @@ pub fn run(arguments: Arguments, config: Config) {
             exhentai::crawl(crawler, output, reload, galleries);
         }
         Some(Website::Pixiv { target }) => {
-            let crawler = Crawler::new(timeout, retry, concurrency, Vec::new());
+            let crawler = Crawler::new(timeout, retry, concurrency, vec![("Referer".to_string(), "https://www.pixiv.net/".to_string())]);
             match target {
-            Some(PixivTarget::User { ids }) => pixiv::crawl_user(crawler, output, ids),
-            Some(PixivTarget::Artwork { ids }) => pixiv::crawl_artwork(crawler, output, ids),
+            Some(PixivTarget::User { ids }) => pixiv::crawl_users(crawler, output, ids),
+            Some(PixivTarget::Artwork { ids }) => pixiv::crawl_artworks(crawler, output, ids),
             None => (),
         }}
         None => (),

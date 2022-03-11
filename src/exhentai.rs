@@ -1,15 +1,13 @@
 use regex::Regex;
-
 use kuchiki::traits::*;
 use kuchiki::{self, NodeRef};
-use log::{debug, error, info};
+use log::{error, info};
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::fs;
 use std::io::{self, Write};
 use std::iter::zip;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::PathBuf;
 
 use lazy_static::lazy_static;
 
@@ -77,7 +75,7 @@ fn crawl_gallery(
     range: Option<(usize, usize)>,
 ) {
     // Crawl the home page and extract some basic information.
-    let mut page = match crawler.get_text(&url, Vec::new()) {
+    let page = match crawler.get_text(&url, Vec::new()) {
         Ok(page) => page,
         Err(err) => {
             error!("Fail to request the index page 1 for `{}`: {}", url, err);
@@ -95,6 +93,7 @@ fn crawl_gallery(
     };
 
     let progress = Progress::new(&title, end - start);
+    progress.make_progress();
     progress.print_progress();
 
     let start_page = start / 20;
@@ -134,7 +133,7 @@ fn crawl_gallery(
     let title = sanitize_filename::sanitize(title);
     let mut folder_path = output.clone();
     folder_path.push(&title);
-    fs::create_dir(output)
+    fs::create_dir(&folder_path)
         .map_err(|err| error!("Fail to create the gallery directory for `{title}`: {err}"))
         .unwrap();
 
@@ -150,7 +149,7 @@ fn crawl_gallery(
             .collect();
         let page_tasks = uncrawler_pages
             .iter()
-            .map(|(u, q, i)| (u.as_str(), q.to_vec()))
+            .map(|(u, q, _)| (u.as_str(), q.to_vec()))
             .collect();
         let page_results = crawler.batch_text(page_tasks);
 
@@ -169,7 +168,7 @@ fn crawl_gallery(
 
         let image_tasks = uncrawler_images
             .iter()
-            .map(|(u, i)| (u.as_str(), Vec::new()))
+            .map(|(u, _)| (u.as_str(), Vec::new()))
             .collect();
         let image_results = crawler.batch(image_tasks);
         for (result, (_, image)) in zip(image_results, uncrawler_images) {

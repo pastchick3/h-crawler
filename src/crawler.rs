@@ -1,8 +1,8 @@
 
-use std::io::{self, Write, Read};
-use ureq::{AgentBuilder, Agent, Response};
+use std::io::Read;
+use ureq::{AgentBuilder, Agent, Response, MiddlewareNext, Request};
 use std::time::Duration;
-use log::{info, debug};
+use log::debug;
 
 const USER_AGENT: &str = concat!(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ",
@@ -19,10 +19,16 @@ pub struct Crawler {
 }
 
 impl Crawler {
-    pub fn new(timeout: u64, retry:usize, concurrency: usize, cookies: Vec<(String, String)>) -> Self {
+    pub fn new(timeout: u64, retry:usize, concurrency: usize, headers: Vec<(String, String)>) -> Self {
+        let add_header = move |mut req: Request, next: MiddlewareNext| {
+            for (header, value) in headers.clone() {
+            req=req.set(&header, &value);
+            }
+            next.handle(req)
+        };
         let agent = 
         AgentBuilder::new()
-        //.cookie_store()
+        .middleware(add_header)
         .timeout(Duration::from_secs(timeout))
         .user_agent(USER_AGENT)
       .build();
@@ -40,7 +46,7 @@ impl Crawler {
     ) -> Result<Vec<u8>, String> {
         let resp = self._get(url, queries)?;
         let mut buf = Vec::new();
-        resp.into_reader().read_to_end(&mut buf);
+        resp.into_reader().read_to_end(&mut buf).unwrap();
         return Ok(buf);
     }
 
