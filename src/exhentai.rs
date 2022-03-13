@@ -1,48 +1,15 @@
-use regex::Regex;
 use kuchiki::traits::*;
 use kuchiki::{self, NodeRef};
 use log::{error, info};
-use std::cell::RefCell;
-use std::fmt::{Display, Formatter, Result as FmtResult};
+use regex::Regex;
 use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::iter::zip;
 use std::path::PathBuf;
 
 use lazy_static::lazy_static;
 
 use crate::crawler::Crawler;
-
-struct Progress {
-    title: String,
-    done: RefCell<usize>,
-    total: usize,
-}
-
-impl Display for Progress {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "{} => {}/{}", self.title, self.done.borrow(), self.total)
-    }
-}
-
-impl Progress {
-    fn new(title: &str, total: usize) -> Self {
-        Progress {
-            title: title.to_string(),
-            done: RefCell::new(0),
-            total,
-        }
-    }
-
-    fn make_progress(&self) {
-        *self.done.borrow_mut() += 1;
-    }
-
-    fn print_progress(&self) {
-        print!("\r{}", self);
-        io::stdout().flush().unwrap();
-    }
-}
 
 pub fn crawl(crawler: Crawler, output: PathBuf, reload: usize, galleries: Vec<String>) {
     for gallery in galleries {
@@ -75,7 +42,8 @@ fn crawl_gallery(
     range: Option<(usize, usize)>,
 ) {
     // Crawl the home page and extract some basic information.
-    let page = match crawler.get_text(&url, Vec::new()) {
+    let mut results = crawler.get_text("", vec![(url.clone(), Vec::new())]);
+    let page = match results.pop().unwrap() {
         Ok(page) => page,
         Err(err) => {
             error!("Fail to request the index page 1 for `{}`: {}", url, err);
@@ -86,15 +54,13 @@ fn crawl_gallery(
     let title = extract_title(&document).unwrap();
     let image_count = extract_image_count(&document).unwrap();
 
+    println!("{title}");
+
     // Determine a proper range.
     let (start, end) = match range {
         Some((start, end)) => (start - 1, end),
         None => (0, image_count),
     };
-
-    let progress = Progress::new(&title, end - start);
-    progress.make_progress();
-    progress.print_progress();
 
     let start_page = start / 20;
     let start = start % 20;
@@ -110,9 +76,9 @@ fn crawl_gallery(
     let mut image_page_urls = Vec::new();
     let tasks = (start_page..=end_page)
         .into_iter()
-        .map(|p| (url.as_str(), vec![("p".to_string(), p.to_string())]))
+        .map(|p| (url.clone(), vec![("p".to_string(), p.to_string())]))
         .collect();
-    let results = crawler.batch_text(tasks);
+    let results = crawler.get_text("", tasks);
     for (p, result) in results.into_iter().enumerate() {
         let page = match result {
             Ok(page) => page,
@@ -142,16 +108,16 @@ fn crawl_gallery(
         .iter()
         .map(|url| (url, Vec::new(), Vec::new()))
         .collect();
-    for _ in 0..=reload {
+    for r in 0..=reload {
         let uncrawler_pages: Vec<_> = image_pages
             .iter_mut()
             .filter(|(_, _, image)| image.is_empty())
             .collect();
         let page_tasks = uncrawler_pages
             .iter()
-            .map(|(u, q, _)| (u.as_str(), q.to_vec()))
+            .map(|(u, q, _)| ((*u).clone(), q.to_vec()))
             .collect();
-        let page_results = crawler.batch_text(page_tasks);
+        let page_results = crawler.get_text(&format!("    Page (reload {r})"), page_tasks);
 
         let uncrawler_images: Vec<_> = zip(page_results, uncrawler_pages)
             .filter_map(|(result, (_, queries, image))| {
@@ -168,9 +134,9 @@ fn crawl_gallery(
 
         let image_tasks = uncrawler_images
             .iter()
-            .map(|(u, _)| (u.as_str(), Vec::new()))
+            .map(|(u, _)| (u.clone(), Vec::new()))
             .collect();
-        let image_results = crawler.batch(image_tasks);
+        let image_results = crawler.get_byte(&format!("    Image (reload {r})"), image_tasks);
         for (result, (_, image)) in zip(image_results, uncrawler_images) {
             if let Ok(img) = result {
                 *image = img;
@@ -255,7 +221,8 @@ fn extract_image_page_urls(document: &NodeRef) -> Result<Vec<String>, ()> {
     let a_tags = document.select("#gdt a")?;
     a_tags
         .map(|a| {
-            Ok(a.as_node().clone()
+            Ok(a.as_node()
+                .clone()
                 .into_element_ref()
                 .ok_or(())?
                 .attributes
@@ -271,9 +238,6 @@ fn extract_image_urls(document: &NodeRef) -> Result<(String, (String, String)), 
     // Extract the image url.
     let image_url = document
         .select_first("#img")?
-        .as_node().clone()
-        .into_element_ref()
-        .ok_or(())?
         .attributes
         .borrow()
         .get("src")
@@ -283,9 +247,6 @@ fn extract_image_urls(document: &NodeRef) -> Result<(String, (String, String)), 
     // Extract the reload parameters.
     let reload_fn = document
         .select_first("#loadfail")?
-        .as_node().clone()
-        .into_element_ref()
-        .ok_or(())?
         .attributes
         .borrow()
         .get("onclick")

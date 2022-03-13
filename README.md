@@ -11,6 +11,7 @@
 | `exhentai` | `reload` | Integer | No (`1`) | Reloading times for images[^1] |
 | `exhentai` | `ipb_member_id` | String | Yes | Cookie for ExHentai login |
 | `exhentai` | `ipb_pass_hash` | String | Yes | Cookie for ExHentai login |
+| `pixiv` | `PHPSESSID` | String | Yes | Cookie for pixiv login |
 
 [^1]: This corresponds to the `Click here if the image fails loading` button, which will try to fetch the image from another server.
 
