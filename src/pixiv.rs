@@ -20,7 +20,7 @@ pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
             .pop()
             .unwrap()
             .unwrap();
-            let document = kuchiki::parse_html().one(page);
+        let document = kuchiki::parse_html().one(page);
         let json_str = document
             .select_first("#meta-preload-data")
             .unwrap()
@@ -42,8 +42,8 @@ pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
             .unwrap();
 
         // Crawl all artworks
-        let page = crawler
-            .get_text(
+        let json = crawler
+            .get_json(
                 "",
                 vec![(
                     &format!("https://www.pixiv.net/ajax/user/{id}/profile/all"),
@@ -53,7 +53,6 @@ pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
             .pop()
             .unwrap()
             .unwrap();
-        let json: Value = serde_json::from_str(&page).unwrap();
         let illusts: Vec<_> = json["body"]["illusts"]
             .as_object()
             .unwrap()
@@ -66,13 +65,11 @@ pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
 
 pub fn crawl_artworks(crawler: &Crawler, output: PathBuf, artist: String, ids: Vec<String>) {
     println!("{artist}");
-    let urls:Vec<_> = ids
-    .iter()
-    .map(|id| format!("https://www.pixiv.net/artworks/{id}")).collect();
-    let requests = urls
+    let urls: Vec<_> = ids
         .iter()
-        .map(|url| (url.as_str(), Vec::new()))
+        .map(|id| format!("https://www.pixiv.net/artworks/{id}"))
         .collect();
+    let requests = urls.iter().map(|url| (url.as_str(), Vec::new())).collect();
     let results = crawler.get_text("    Artwork Index", requests);
     let responses = iter::zip(ids, results).filter_map(|(id, result)| match result {
         Ok(response) => Some((id, response)),
@@ -123,10 +120,10 @@ pub fn crawl_artworks(crawler: &Crawler, output: PathBuf, artist: String, ids: V
             .unwrap();
 
         // crawl image
-        let urls:Vec<_> = (0..page_count).map(|i|format!("{image_base}{i}{image_ext}")).collect();
-        let requests = urls.iter()
-            .map(|u| (u.as_str(), Vec::new()))
+        let urls: Vec<_> = (0..page_count)
+            .map(|i| format!("{image_base}{i}{image_ext}"))
             .collect();
+        let requests = urls.iter().map(|u| (u.as_str(), Vec::new())).collect();
         let results = crawler.get_byte(&format!("    {title}"), requests);
         let responses =
             iter::zip(0..page_count, results).filter_map(|(cnt, result)| match result {

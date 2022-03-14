@@ -116,23 +116,19 @@ pub fn run(arguments: Arguments, config: Config) {
                 .cloned()
                 .unwrap_or(RELOAD);
             let ipb_member_id = ipb_member_id
-                .or(
-                    config
-                        .exhentai
-                        .as_ref()
-                        .map(|eh| eh.ipb_member_id.clone())
-                        .flatten()
-                )
+                .or(config
+                    .exhentai
+                    .as_ref()
+                    .map(|eh| eh.ipb_member_id.clone())
+                    .flatten())
                 .expect("`ipb_member_id` is not defined")
                 .clone();
             let ipb_pass_hash = ipb_pass_hash
-                .or(
-                    config
-                        .exhentai
-                        .as_ref()
-                        .map(|eh| eh.ipb_pass_hash.clone())
-                        .flatten()
-                )
+                .or(config
+                    .exhentai
+                    .as_ref()
+                    .map(|eh| eh.ipb_pass_hash.clone())
+                    .flatten())
                 .expect("`ipb_pass_hash` is not defined")
                 .clone();
             let cookies = vec![
@@ -144,13 +140,11 @@ pub fn run(arguments: Arguments, config: Config) {
         }
         Some(Website::Pixiv { phpsessid, target }) => {
             let phpsessid = phpsessid
-                .or(
-                    config
-                        .pixiv
-                        .as_ref()
-                        .map(|px| px.phpsessid.clone())
-                        .flatten()
-                )
+                .or(config
+                    .pixiv
+                    .as_ref()
+                    .map(|px| px.phpsessid.clone())
+                    .flatten())
                 .expect("`phpsessid` is not defined")
                 .clone();
             let crawler = Crawler::new(

@@ -76,7 +76,8 @@ fn crawl_gallery(
     // Crawl index pages and extract links to image pages.
     let mut image_page_urls = Vec::new();
     let page_nums: Vec<_> = (start_page..=end_page).map(|i| i.to_string()).collect();
-    let tasks = page_nums.iter()
+    let tasks = page_nums
+        .iter()
         .map(|p| (url.as_str(), vec![("p", p.as_str())]))
         .collect();
     let results = crawler.get_text("", tasks);
@@ -112,11 +113,20 @@ fn crawl_gallery(
     for r in 0..=reload {
         let uncrawler_pages: Vec<_> = image_pages
             .iter_mut()
-            .filter(|(_, _, image, _): &&mut (&String, Vec<(String, String)>, Vec<u8>, String)| image.is_empty())
+            .filter(
+                |(_, _, image, _): &&mut (&String, Vec<(String, String)>, Vec<u8>, String)| {
+                    image.is_empty()
+                },
+            )
             .collect();
         let page_tasks = uncrawler_pages
             .iter()
-            .map(|(u, q, _, _)| (u.as_str(), q.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect()))
+            .map(|(u, q, _, _)| {
+                (
+                    u.as_str(),
+                    q.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect(),
+                )
+            })
             .collect();
         let page_results = crawler.get_text(&format!("    Page (reload {r})"), page_tasks);
 
