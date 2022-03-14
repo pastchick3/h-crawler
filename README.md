@@ -1,6 +1,6 @@
 # H Crawler
 
-`H Crawler` can be tuned using a config file, whose default path is `--config=./h-config.toml`. This config file can contain following sections and fields. All of them can also be supplied directly from the command line, which will override values in the config file. Also, `H Crawler` uses `env_logger` for logging, so you can set `RUST_LOG` appropriately for more detailed output.
+`H Crawler` can be tuned using a config file, whose default path is `--config=./h-config.toml`. This config file can contain following sections and fields. All of them can also be supplied directly from the command line, which will override values in the config file. Also, `H Crawler` uses `env_logger` for logging, so you can set `RUST_LOG=h_crawler` appropriately for more detailed output.
 
 | Section | Field | Value Type | Is Required (Default) | Description |
 | --- | --- | --- | --- | --- |

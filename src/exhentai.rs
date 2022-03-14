@@ -42,7 +42,8 @@ fn crawl_gallery(
     range: Option<(usize, usize)>,
 ) {
     // Crawl the home page and extract some basic information.
-    let mut results = crawler.get_text("", vec![(url.clone(), Vec::new())]);
+    let mut results = crawler.get_text("", vec![(&url, Vec::new())]);
+
     let page = match results.pop().unwrap() {
         Ok(page) => page,
         Err(err) => {
@@ -74,9 +75,9 @@ fn crawl_gallery(
 
     // Crawl index pages and extract links to image pages.
     let mut image_page_urls = Vec::new();
-    let tasks = (start_page..=end_page)
-        .into_iter()
-        .map(|p| (url.clone(), vec![("p".to_string(), p.to_string())]))
+    let page_nums: Vec<_> = (start_page..=end_page).map(|i| i.to_string()).collect();
+    let tasks = page_nums.iter()
+        .map(|p| (url.as_str(), vec![("p", p.as_str())]))
         .collect();
     let results = crawler.get_text("", tasks);
     for (p, result) in results.into_iter().enumerate() {
@@ -105,26 +106,34 @@ fn crawl_gallery(
 
     // Crawl image pages and images.
     let mut image_pages: Vec<_> = image_page_urls[start..end]
-        .iter()
-        .map(|url| (url, Vec::new(), Vec::new()))
+        .into_iter()
+        .map(|url| (url, Vec::new(), Vec::new(), String::new()))
         .collect();
     for r in 0..=reload {
         let uncrawler_pages: Vec<_> = image_pages
             .iter_mut()
-            .filter(|(_, _, image)| image.is_empty())
+            .filter(|(_, _, image, _): &&mut (&String, Vec<(String, String)>, Vec<u8>, String)| image.is_empty())
             .collect();
         let page_tasks = uncrawler_pages
             .iter()
-            .map(|(u, q, _)| ((*u).clone(), q.to_vec()))
+            .map(|(u, q, _, _)| (u.as_str(), q.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect()))
             .collect();
         let page_results = crawler.get_text(&format!("    Page (reload {r})"), page_tasks);
 
         let uncrawler_images: Vec<_> = zip(page_results, uncrawler_pages)
-            .filter_map(|(result, (_, queries, image))| {
+            .filter_map(|(result, (_, queries, image, ext))| {
                 if let Ok(img) = result {
                     let document = kuchiki::parse_html().one(img);
                     let (image_url, new_query) = extract_image_urls(&document).unwrap();
                     queries.push(new_query);
+                    lazy_static! {
+                        static ref FILE_EXTENSION_REGEX: Regex = Regex::new(r"\.[^\.]+?$").unwrap();
+                    }
+                    let caps = FILE_EXTENSION_REGEX
+                        .captures(&image_url)
+                        .ok_or(format!("Invalid file extension: {image_url}"))
+                        .unwrap();
+                    ext.push_str(&caps[0]);
                     Some((image_url, image))
                 } else {
                     None
@@ -134,7 +143,7 @@ fn crawl_gallery(
 
         let image_tasks = uncrawler_images
             .iter()
-            .map(|(u, _)| (u.clone(), Vec::new()))
+            .map(|(u, _)| (u.as_str(), Vec::new()))
             .collect();
         let image_results = crawler.get_byte(&format!("    Image (reload {r})"), image_tasks);
         for (result, (_, image)) in zip(image_results, uncrawler_images) {
@@ -147,18 +156,12 @@ fn crawl_gallery(
     }
 
     // Write to file.
-    for (i, (url, _, image)) in image_pages.iter().enumerate() {
+    for (i, (url, _, image, ext)) in image_pages.iter().enumerate() {
         if !image.is_empty() {
-            lazy_static! {
-                static ref FILE_EXTENSION_REGEX: Regex = Regex::new(r"\.[^\.]+?$").unwrap();
-            }
-            let caps = FILE_EXTENSION_REGEX
-                .captures(url)
-                .ok_or(format!("Invalid file extension: {url}"))
-                .unwrap();
-            let file_name = format!("{:0>4}{}", i + 1, &caps[0]);
+            let file_name = format!("{:0>4}{}", i + 1, ext);
             let mut file_path = folder_path.clone();
             file_path.push(file_name);
+            println!("###{file_path:?}");
             let mut file = fs::File::create(file_path)
                 .map_err(|err| format!("Fail to create the image file: {err}"))
                 .unwrap();
@@ -175,7 +178,7 @@ fn crawl_gallery(
         .iter()
         .enumerate()
         .filter_map(
-            |(i, (_, _, image))| {
+            |(i, (_, _, image, _))| {
                 if image.is_empty() {
                     Some(i + 1)
                 } else {

@@ -12,14 +12,25 @@ use std::path::PathBuf;
 pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
     for id in ids {
         // Create the artist directory.
-        let json = crawler
-            .get_json(
+        let page = crawler
+            .get_text(
                 "",
-                vec![(format!("https://www.pixiv.net/users/{id}"), Vec::new())],
+                vec![(&format!("https://www.pixiv.net/users/{id}"), Vec::new())],
             )
             .pop()
             .unwrap()
             .unwrap();
+            let document = kuchiki::parse_html().one(page);
+        let json_str = document
+            .select_first("#meta-preload-data")
+            .unwrap()
+            .attributes
+            .borrow()
+            .get("content")
+            .ok_or(())
+            .unwrap()
+            .to_string();
+        let json: Value = serde_json::from_str(&json_str).unwrap();
         let artist = json["user"][&id]["name"].as_str().unwrap().to_string();
 
         let folder = format!("[{artist}]");
@@ -35,7 +46,7 @@ pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
             .get_text(
                 "",
                 vec![(
-                    format!("https://www.pixiv.net/ajax/user/{id}/profile/all"),
+                    &format!("https://www.pixiv.net/ajax/user/{id}/profile/all"),
                     Vec::new(),
                 )],
             )
@@ -55,9 +66,12 @@ pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
 
 pub fn crawl_artworks(crawler: &Crawler, output: PathBuf, artist: String, ids: Vec<String>) {
     println!("{artist}");
-    let requests = ids
+    let urls:Vec<_> = ids
+    .iter()
+    .map(|id| format!("https://www.pixiv.net/artworks/{id}")).collect();
+    let requests = urls
         .iter()
-        .map(|id| (format!("https://www.pixiv.net/artworks/{id}"), Vec::new()))
+        .map(|url| (url.as_str(), Vec::new()))
         .collect();
     let results = crawler.get_text("    Artwork Index", requests);
     let responses = iter::zip(ids, results).filter_map(|(id, result)| match result {
@@ -109,8 +123,9 @@ pub fn crawl_artworks(crawler: &Crawler, output: PathBuf, artist: String, ids: V
             .unwrap();
 
         // crawl image
-        let requests = (0..page_count)
-            .map(|i| (format!("{image_base}{i}{image_ext}"), Vec::new()))
+        let urls:Vec<_> = (0..page_count).map(|i|format!("{image_base}{i}{image_ext}")).collect();
+        let requests = urls.iter()
+            .map(|u| (u.as_str(), Vec::new()))
             .collect();
         let results = crawler.get_byte(&format!("    {title}"), requests);
         let responses =
