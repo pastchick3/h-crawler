@@ -97,7 +97,6 @@ pub fn run(arguments: Arguments, config: Config) {
         .concurrency
         .and(config.concurrency)
         .unwrap_or(CONCURRENCY);
-
     match arguments.website {
         Some(Website::Exhentai {
             reload,
@@ -136,7 +135,7 @@ pub fn run(arguments: Arguments, config: Config) {
                 ("ipb_pass_hash", ipb_pass_hash.as_str()),
             ];
             let crawler = Crawler::new(concurrency, timeout, Vec::new(), cookies, retry);
-            exhentai::crawl(crawler, output, reload, galleries);
+            exhentai::crawl_galleries(&crawler, output, reload, galleries);
         }
         Some(Website::Pixiv { phpsessid, target }) => {
             let phpsessid = phpsessid
@@ -155,10 +154,8 @@ pub fn run(arguments: Arguments, config: Config) {
                 retry,
             );
             match target {
-                Some(PixivTarget::User { ids }) => pixiv::crawl_users(crawler, output, ids),
-                Some(PixivTarget::Artwork { ids }) => {
-                    pixiv::crawl_artworks(&crawler, output, String::from("Unnamed"), ids)
-                }
+                Some(PixivTarget::User { ids }) => pixiv::crawl_users(&crawler, output, ids),
+                Some(PixivTarget::Artwork { ids }) => pixiv::crawl_illusts(&crawler, output, ids),
                 None => (),
             }
         }

@@ -65,7 +65,7 @@ struct CrawlerRequest {
 
 struct CrawlerResult {
     id: usize,
-    result: Result<Response, Error>,
+    result: Result<Vec<u8>, String>,
 }
 
 pub struct Crawler {
@@ -94,44 +94,57 @@ impl Crawler {
             let requests = requests.clone();
             let results = results.clone();
             let progress = progress.clone();
-            thread::spawn(move || loop {
-                let request = { requests.lock().unwrap().pop() };
+            thread::spawn(move || {
+                let thread_id = thread::current().id();
+                loop {
+                    thread::sleep(Duration::from_millis(200));
 
-                match request {
-                    Some(CrawlerRequest {
+                    let request = requests.lock().unwrap().pop();
+
+                    if let Some(CrawlerRequest {
                         id,
                         request,
                         mut retry,
-                    }) => {
-                        match request.clone().call() {
+                    }) = request
+                    {
+                        let (buf, err) = match request.clone().call() {
                             Ok(resp) => {
-                                info!("Request succeed - id: {id}, request: {request:?}");
-                                let mut prog = progress.lock().unwrap();
-                                prog.make_progress();
+                                let mut buf = Vec::new();
+                                match resp.into_reader().read_to_end(&mut buf) {
+                                    Ok(_) => (buf, String::new()),
+                                    Err(err) => (Vec::new(), err.to_string()),
+                                }
+                                
+                            }
+                            Err(err) => (Vec::new(), err.to_string()),
+                        };
+                        if buf.is_empty() {
+                            if retry == 0 {
+                                debug!(
+                                "Request fail ({thread_id:?})- id: {id}, request: {request:?}, error: {err:?}"
+                            );
                                 let result = CrawlerResult {
                                     id,
-                                    result: Ok(resp),
+                                    result: Err(err),
                                 };
                                 results.lock().unwrap().push(result);
+                            } else {
+                                retry -= 1;
+                                debug!("Retry request ({thread_id:?})- id: {id}, request: {request:?}, retry: {retry}, error: {err:?}");
+                                let request = CrawlerRequest { id, request, retry };
+                                requests.lock().unwrap().insert(0, request);
                             }
-                            Err(err) => {
-                                if retry == 0 {
-                                    info!("Request fail - id: {id}, request: {request:?}, error: {err:?}");
-                                    let result = CrawlerResult {
-                                        id,
-                                        result: Err(err),
-                                    };
-                                    results.lock().unwrap().push(result);
-                                } else {
-                                    retry -= 1;
-                                    debug!("Retry request - id: {id}, request: {request:?}, retry: {retry}");
-                                    let request = CrawlerRequest { id, request, retry };
-                                    requests.lock().unwrap().insert(0, request);
-                                }
-                            }
+                        } else {
+                            debug!("Request succeed ({thread_id:?}) - id: {id}, request: {request:?}");
+                            let mut prog = progress.lock().unwrap();
+                            prog.make_progress();
+                            let result = CrawlerResult {
+                                id,
+                                result: Ok(buf),
+                            };
+                            results.lock().unwrap().push(result);
                         }
                     }
-                    None => thread::sleep(Duration::from_millis(200)),
                 }
             });
         }
@@ -157,8 +170,10 @@ impl Crawler {
             next.handle(request.set("Cookie", &cookie_str))
         };
         let agent = AgentBuilder::new()
+        .tls_connector(Arc::new(native_tls::TlsConnector::new().unwrap()))
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(timeout))
+            .timeout_connect(Duration::from_secs(timeout))
             .middleware(add_headers)
             .middleware(add_cookies)
             .build();
@@ -179,13 +194,7 @@ impl Crawler {
     ) -> Vec<Result<String, String>> {
         self.get(name, requests)
             .into_iter()
-            .map(|result| match result {
-                Ok(resp) => match resp.into_string() {
-                    Ok(resp) => Ok(resp),
-                    Err(err) => Err(err.to_string()),
-                },
-                Err(err) => Err(err),
-            })
+            .map(|rslt| rslt.map(|bytes|String::from_utf8(bytes).unwrap()))
             .collect()
     }
 
@@ -196,13 +205,7 @@ impl Crawler {
     ) -> Vec<Result<Value, String>> {
         self.get(name, requests)
             .into_iter()
-            .map(|result| match result {
-                Ok(resp) => match resp.into_json() {
-                    Ok(resp) => Ok(resp),
-                    Err(err) => Err(err.to_string()),
-                },
-                Err(err) => Err(err),
-            })
+            .map(|rslt| rslt.map(|bytes| serde_json::from_slice(&bytes).unwrap()))
             .collect()
     }
 
@@ -212,30 +215,18 @@ impl Crawler {
         requests: Vec<(&str, Vec<(&str, &str)>)>,
     ) -> Vec<Result<Vec<u8>, String>> {
         self.get(name, requests)
-            .into_iter()
-            .map(|result| {
-                let mut buf = Vec::new();
-                match result {
-                    Ok(resp) => match resp.into_reader().read_to_end(&mut buf) {
-                        Ok(_) => Ok(buf),
-                        Err(err) => Err(err.to_string()),
-                    },
-                    Err(err) => Err(err),
-                }
-            })
-            .collect()
     }
 
     fn get(
         &self,
         name: &str,
         requests: Vec<(&str, Vec<(&str, &str)>)>,
-    ) -> Vec<Result<Response, String>> {
+    ) -> Vec<Result<Vec<u8>, String>> {
         let total = requests.len();
         let progress = Progress::new(name, total);
         *self.progress.lock().unwrap() = progress;
 
-        let requests: Vec<_> = requests
+        let requests = requests
             .into_iter()
             .enumerate()
             .map(|(id, (url, queries))| {
@@ -258,10 +249,7 @@ impl Crawler {
                 let mut results = mem::take(&mut *results);
                 results.sort_unstable_by_key(|r| r.id);
                 self.progress.lock().unwrap().finish();
-                return results
-                    .into_iter()
-                    .map(|rslt| rslt.result.map_err(|err| err.to_string()))
-                    .collect();
+                return results.into_iter().map(|r| r.result).collect();
             }
         }
     }

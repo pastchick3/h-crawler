@@ -1,48 +1,57 @@
 use crate::crawler::Crawler;
 use kuchiki::traits::*;
 use lazy_static::lazy_static;
-use log::error;
 use regex::Regex;
 use serde_json::Value;
-use std::fs;
+use std::fs::{self, File};
 use std::io::Write;
-use std::iter;
 use std::path::PathBuf;
 
-pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
-    for id in ids {
-        // Create the artist directory.
-        let page = crawler
+pub fn crawl_users(crawler: &Crawler, output: PathBuf, users: Vec<String>) {
+    for user in users {
+        let parts: Vec<_> = user.split('/').collect();
+        let (id, range) = match parts[..] {
+            [id] => (id, None),
+            [id, range] => (id, Some(range)),
+            _ => {
+                println!("Invalid User {user}");
+                continue;
+            }
+        };
+
+        let page_result = crawler
             .get_text(
                 "",
                 vec![(&format!("https://www.pixiv.net/users/{id}"), Vec::new())],
             )
             .pop()
-            .unwrap()
             .unwrap();
-        let document = kuchiki::parse_html().one(page);
-        let json_str = document
-            .select_first("#meta-preload-data")
-            .unwrap()
-            .attributes
-            .borrow()
-            .get("content")
-            .ok_or(())
-            .unwrap()
-            .to_string();
-        let json: Value = serde_json::from_str(&json_str).unwrap();
-        let artist = json["user"][&id]["name"].as_str().unwrap().to_string();
+        let user = match page_result {
+            Ok(page) => {
+                let document = kuchiki::parse_html().one(page);
+                let json_str = document
+                    .select_first("#meta-preload-data")
+                    .unwrap()
+                    .attributes
+                    .borrow()
+                    .get("content")
+                    .unwrap()
+                    .to_string();
+                let json: Value = serde_json::from_str(&json_str).unwrap();
+                json["user"][&id]["name"].as_str().unwrap().to_string()
+            }
+            Err(err) => {
+                println!("Fail to crawl the home page for User {id}: {err}");
+                continue;
+            }
+        };
 
-        let folder = format!("[{artist}]");
-        let folder = sanitize_filename::sanitize(folder);
-        let mut folder_path = output.clone();
-        folder_path.push(&folder);
-        fs::create_dir(&folder_path)
-            .map_err(|err| error!("Fail to create the gallery directory for `{artist}`: {err}"))
-            .unwrap();
+        let mut directory_path = output.clone();
+        let directory = sanitize_filename::sanitize(format!("[{user}]"));
+        directory_path.push(directory);
+        fs::create_dir(&directory_path).unwrap();
 
-        // Crawl all artworks
-        let json = crawler
+        let illusts_result = crawler
             .get_json(
                 "",
                 vec![(
@@ -51,96 +60,150 @@ pub fn crawl_users(crawler: Crawler, output: PathBuf, ids: Vec<String>) {
                 )],
             )
             .pop()
-            .unwrap()
             .unwrap();
-        let illusts: Vec<_> = json["body"]["illusts"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect();
-        crawl_artworks(&crawler, folder_path, artist, illusts);
+
+        let mut illusts: Vec<_> = match illusts_result {
+            Ok(json) => json["body"]["illusts"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .rev()
+                .collect(),
+            Err(err) => {
+                println!("Fail to crawl the illust index for User {id}: {err}");
+                continue;
+            }
+        };
+
+        let (start, end) = if let Some(range) = range {
+            let parts: Vec<_> = range.split('-').collect();
+            if parts.len() != 2 {
+                println!("Invalid range for User {id}");
+                continue;
+            }
+            let start = parts[0].parse().unwrap();
+            let end = parts[1].parse().unwrap();
+            (start, end)
+        } else {
+            (1, illusts.len())
+        };
+
+        let total = end - start + 1;
+        println!("{user} - {total} illusts");
+
+        crawl_illusts(
+            crawler,
+            directory_path,
+            illusts.drain(start - 1..end).collect(),
+        );
     }
 }
 
-pub fn crawl_artworks(crawler: &Crawler, output: PathBuf, artist: String, ids: Vec<String>) {
-    println!("{artist}");
-    let urls: Vec<_> = ids
+pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
+    let page_urls: Vec<_> = illusts
         .iter()
         .map(|id| format!("https://www.pixiv.net/artworks/{id}"))
         .collect();
-    let requests = urls.iter().map(|url| (url.as_str(), Vec::new())).collect();
-    let results = crawler.get_text("    Artwork Index", requests);
-    let responses = iter::zip(ids, results).filter_map(|(id, result)| match result {
-        Ok(response) => Some((id, response)),
-        Err(err) => {
-            println!("    Fail to crawl artwork {id}");
-            error!("Fail to crawl artwork {id}: {err}");
-            None
-        }
-    });
-    for (id, response) in responses {
-        let document = kuchiki::parse_html().one(response);
+    let page_requests = page_urls
+        .iter()
+        .map(|url| (url.as_str(), Vec::new()))
+        .collect();
+    let page_results = crawler.get_text("", page_requests);
+
+    let index_urls: Vec<_> = illusts
+        .iter()
+        .map(|id| format!("https://www.pixiv.net/ajax/illust/{id}/pages"))
+        .collect();
+    let index_requests = index_urls
+        .iter()
+        .map(|url| (url.as_str(), Vec::new()))
+        .collect();
+    let index_results = crawler.get_json("", index_requests);
+
+    let illusts = illusts
+        .iter()
+        .zip(page_results)
+        .zip(index_results)
+        .filter_map(|((id, page), index)| match (page, index) {
+            (Ok(page), Ok(index)) => Some((id, page, index)),
+            (Ok(_), Err(err)) => {
+                println!("Fail to crawl the image index for Illust {id}: {err}");
+                None
+            }
+            (Err(err), Ok(_)) => {
+                println!("Fail to crawl the main page for Illust {id}: {err}");
+                None
+            }
+            (Err(page_err), Err(index_err)) => {
+                println!("Fail to crawl the main page for Illust {id}: {page_err}");
+                println!("Fail to crawl the image index for Illust {id}: {index_err}");
+                None
+            }
+        });
+
+    for (id, page, index) in illusts {
+        let document = kuchiki::parse_html().one(page);
         let json_str = document
             .select_first("#meta-preload-data")
             .unwrap()
             .attributes
             .borrow()
             .get("content")
-            .ok_or(())
             .unwrap()
             .to_string();
         let json: Value = serde_json::from_str(&json_str).unwrap();
-        let obj = &json["illust"][&id];
-        let artist = obj["userName"].as_str().unwrap();
-        let raw_date = obj["createDate"].as_str().unwrap();
-        lazy_static! {
-            static ref DATE_REGEX: Regex =
-                Regex::new(r"^[0-9]{2}([0-9]{2})-([0-9]{2})-([0-9]{2})").unwrap();
-        }
-        let caps = DATE_REGEX.captures(raw_date).unwrap();
-        let date = format!("{}{}{}", &caps[1], &caps[2], &caps[3]);
-        let title = obj["title"].as_str().unwrap();
-        let page_count = obj["pageCount"].as_u64().unwrap();
-        let raw_url = obj["urls"]["original"].as_str().unwrap();
-        lazy_static! {
-            static ref URL_RGEX: Regex = Regex::new(r"(.+)[0-9]+(\.[a-z]+)$").unwrap();
-        }
-        let caps = URL_RGEX.captures(raw_url).unwrap();
-        let image_base = &caps[1];
-        let image_ext = &caps[2];
+        let illust = &json["illust"][&id];
+        let user = illust["userName"].as_str().unwrap();
+        let date = {
+            let date = illust["createDate"].as_str().unwrap();
+            lazy_static! {
+                static ref DATE_REGEX: Regex =
+                    Regex::new(r"([0-9]{2})-([0-9]{2})-([0-9]{2})").unwrap();
+            }
+            let caps = DATE_REGEX.captures(date).unwrap();
+            format!("{}{}{}", &caps[1], &caps[2], &caps[3])
+        };
+        let title = illust["title"].as_str().unwrap();
 
         // Create the gallery directory.
-        let title = format!("[{artist}] [{date}] {title} ({id})");
-        let title = sanitize_filename::sanitize(title);
-        let mut folder_path = output.clone();
-        folder_path.push(&title);
-        fs::create_dir(&folder_path)
-            .map_err(|err| error!("Fail to create the gallery directory for `{title}`: {err}"))
-            .unwrap();
+        let title = sanitize_filename::sanitize(format!("[{user}] [{date}] {title} ({id})"));
+        let mut directory_path = output.clone();
+        directory_path.push(&title);
+        fs::create_dir(&directory_path).unwrap();
 
         // crawl image
-        let urls: Vec<_> = (0..page_count)
-            .map(|i| format!("{image_base}{i}{image_ext}"))
+        let image_urls: Vec<_> = index["body"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|image| image["urls"]["original"].as_str().unwrap())
             .collect();
-        let requests = urls.iter().map(|u| (u.as_str(), Vec::new())).collect();
-        let results = crawler.get_byte(&format!("    {title}"), requests);
-        let responses =
-            iter::zip(0..page_count, results).filter_map(|(cnt, result)| match result {
-                Ok(response) => Some((cnt, response)),
+        let image_requests = image_urls.iter().map(|url| (*url, Vec::new())).collect();
+        let image_results = crawler.get_byte(&title, image_requests);
+        let images = image_results
+            .iter()
+            .enumerate()
+            .filter_map(|(pg, result)| match result {
+                Ok(image) => Some((pg, image)),
                 Err(err) => {
-                    println!("    Fail to crawl image {cnt}");
-                    error!("Fail to crawl image {cnt}: {err}");
+                    println!("Fail to crawl page {pg} for Illust {id}: {err}");
                     None
                 }
             });
-        for (i, image) in responses {
-            let mut image_path = folder_path.clone();
-            image_path.push(format!("{id}_p{i}.{image_ext}"));
-            let mut file = fs::File::create(image_path)
-                .map_err(|err| format!("Fail to create the image file: {err}"))
-                .unwrap();
-            file.write_all(&image).expect("Fail to write the image.");
+        for ((pg, image), image_url) in images.zip(image_urls) {
+            let image_ext = {
+                lazy_static! {
+                    static ref IMAGE_EXT_REGEX: Regex = Regex::new(r"\.[^\.]+$").unwrap();
+                }
+                let caps = IMAGE_EXT_REGEX.captures(image_url).unwrap();
+                caps[0].to_string()
+            };
+
+            let mut image_path = directory_path.clone();
+            image_path.push(format!("{id}_p{pg}{image_ext}"));
+            let mut image_file = File::create(image_path).unwrap();
+            image_file.write_all(image).unwrap();
         }
     }
 }
