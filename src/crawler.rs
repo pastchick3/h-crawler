@@ -1,3 +1,4 @@
+use log::{debug, info};
 use serde_json::Value;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::io::{self, Read, Write};
@@ -6,6 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use ureq::{Agent, AgentBuilder, MiddlewareNext, Request};
+
+use reqwest::header::{COOKIE,USER_AGENT as U};
+use reqwest::blocking::Client;
 
 const USER_AGENT: &str = concat!(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ",
@@ -50,7 +54,7 @@ impl Progress {
 
     fn finish(&self) {
         if !self.name.is_empty() {
-            println!("");
+            println!();
             io::stdout().flush().unwrap();
         }
     }
@@ -73,6 +77,7 @@ pub struct Crawler {
     results: Arc<Mutex<Vec<CrawlerResult>>>,
     retry: usize,
     progress: Arc<Mutex<Progress>>,
+    client:Arc<Mutex<Client>>,
 }
 
 impl Crawler {
@@ -83,54 +88,10 @@ impl Crawler {
         cookies: Vec<(&str, &str)>,
         retry: usize,
     ) -> Self {
+        // Initialize HTTP agent parameters.
         let requests = Arc::new(Mutex::new(Vec::new()));
         let results = Arc::new(Mutex::new(Vec::new()));
         let progress = Arc::new(Mutex::new(Progress::new("", 0)));
-
-        for _ in 0..concurrency {
-            let requests = requests.clone();
-            let results = results.clone();
-            let progress = progress.clone();
-            thread::spawn(move || loop {
-                thread::sleep(Duration::from_millis(1000 / concurrency as u64));
-
-                let request = requests.lock().unwrap().pop();
-                if let Some(CrawlerRequest {
-                    id,
-                    request,
-                    mut retry,
-                }) = request {
-                    let result = match request.clone().call() {
-                        Ok(resp) => {
-                            let mut bytes = Vec::new();
-                            match resp.into_reader().read_to_end(&mut bytes) {
-                                Ok(_) => Ok(bytes),
-                                Err(err) => Err(err.to_string()),
-                            }
-                        }
-                        Err(err) => Err(err.to_string()),
-                    };
-                    match result {
-                        result @ Ok(_) => {
-                            let mut prog = progress.lock().unwrap();
-                            prog.make_progress();
-                            let result = CrawlerResult { id, result };
-                            results.lock().unwrap().push(result);
-                        }
-                        result @ Err(_) if retry == 0 => {
-                            let result = CrawlerResult { id, result };
-                            results.lock().unwrap().push(result);
-                        }
-                        Err(_) => {
-                            retry -= 1;
-                            let request = CrawlerRequest { id, request, retry };
-                            requests.lock().unwrap().insert(0, request);
-                        }
-                    }
-                }
-            });
-        }
-
         let headers: Vec<_> = headers
             .into_iter()
             .map(|(n, v)| (n.to_string(), v.to_string()))
@@ -152,7 +113,87 @@ impl Crawler {
             }
             next.handle(request.set("Cookie", &cookie_str))
         };
+
+        let client = Arc::new(Mutex::new(Client::new()));
+
+        // Spawn worker threads.
+        for c in 0..concurrency {
+            let requests = requests.clone();
+            let results = results.clone();
+            let progress = progress.clone();
+            let client = client.clone();
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_millis(1000 / concurrency as u64));
+
+                let request = requests.lock().unwrap().pop();
+                if let Some(CrawlerRequest {
+                    id,
+                    request,
+                    mut retry,
+                }) = request
+                {
+                    debug!("Request {id} - Start in Thread {c} (`{request:?}`)");
+
+                    // let result = match request.clone().call() {
+                    //     Ok(resp) => {
+                    //         let mut bytes = Vec::new();
+                    //         match resp.into_reader().read_to_end(&mut bytes) {
+                    //             Ok(_) => Ok(bytes),
+                    //             Err(err) => Err(err.to_string()),
+                    //         }
+                    //     }
+                    //     Err(err) => Err(err.to_string()),
+                    // };
+                    let cookie = "ipb_member_id=872337;ipb_pass_hash=00d8d873d6313523a879200e99099dfb;";
+                    let res = client.lock().unwrap().get(request.url()).timeout(Duration::from_secs(timeout)).header(U, USER_AGENT).header(COOKIE, cookie).send();
+                    let result=match res {
+                        Ok(resp) => match resp.bytes() {
+                            Ok(bytes) => Ok(bytes.to_vec()),
+                            Err(err) => Err(err.to_string()),
+                        }
+                        Err(err) => Err(err.to_string()),
+                    };
+                    // let result = match ureq::get(request.url()).timeout(Duration::from_secs(timeout)).set("Cookie", cookie).call() {
+                    //     Ok(resp) => {
+                    //                 let mut bytes = Vec::new();
+                    //                 match resp.into_reader().read_to_end(&mut bytes) {
+                    //                     Ok(_) => Ok(bytes),
+                    //                     Err(err) => Err(err.to_string()),
+                    //                 }
+                    //             }
+                    //             Err(err) => Err(err.to_string()),
+                    // };
+
+                    match result {
+                        result @ Ok(_) => {
+                            debug!("Request {id} - Succeed in Thread {c} (`{request:?}`)");
+
+                            let mut prog = progress.lock().unwrap();
+                            prog.make_progress();
+                            let result = CrawlerResult { id, result };
+                            results.lock().unwrap().push(result);
+                        }
+                        result @ Err(_) if retry == 0 => {
+                            debug!("Request {id} - Fail in Thread {c} (`{request:?}`)");
+
+                            let result = CrawlerResult { id, result };
+                            results.lock().unwrap().push(result);
+                        }
+                        Err(_) => {
+                            debug!("Request {id} - Retry in Thread {c} (`{request:?}`)");
+
+                            retry -= 1;
+                            let request = CrawlerRequest { id, request, retry };
+                            requests.lock().unwrap().insert(0, request);
+                        }
+                    }
+                }
+            });
+        }
+
+        // Build the HTTP agent.
         let agent = AgentBuilder::new()
+        .tls_connector(Arc::new(native_tls::TlsConnector::new().unwrap()))
             .max_idle_connections(concurrency)
             .max_idle_connections_per_host(concurrency)
             .user_agent(USER_AGENT)
@@ -167,6 +208,7 @@ impl Crawler {
             results,
             retry,
             progress,
+            client
         }
     }
 
@@ -197,10 +239,17 @@ impl Crawler {
         name: &str,
         requests: Vec<(&str, Vec<(&str, &str)>)>,
     ) -> Vec<Result<Vec<u8>, String>> {
+        info!(
+            "Crawler Task \"{name}\" - Start ({} Requests)",
+            requests.len()
+        );
+
+        // Initialize the progress bar.
         let total = requests.len();
         let progress = Progress::new(name, total);
         *self.progress.lock().unwrap() = progress;
 
+        // Build and issue requests.
         let requests = requests
             .into_iter()
             .enumerate()
@@ -218,11 +267,14 @@ impl Crawler {
             .collect();
         *self.requests.lock().unwrap() = requests;
 
+        // Wait for results.
         loop {
             thread::sleep(Duration::from_secs(1));
 
             let mut results = self.results.lock().unwrap();
             if results.len() == total {
+                info!("Crawler Task \"{name}\" - Complete");
+
                 let mut results = mem::take(&mut *results);
                 results.sort_unstable_by_key(|r| r.id);
                 self.progress.lock().unwrap().finish();

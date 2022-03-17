@@ -50,8 +50,8 @@ pub fn crawl_users(crawler: &Crawler, output: PathBuf, users: Vec<String>) {
 
         // Create the user directory.
         let mut directory_path = output.clone();
-        let directory = sanitize_filename::sanitize(format!("[{id}]"));
-        directory_path.push(directory);
+        let directory = sanitize_filename::sanitize(format!("[{user}]"));
+        directory_path.push(&directory);
         fs::create_dir(&directory_path).unwrap();
 
         // Crawl the illust index.
@@ -93,7 +93,7 @@ pub fn crawl_users(crawler: &Crawler, output: PathBuf, users: Vec<String>) {
             (1, illusts.len())
         };
         let total = end - start + 1;
-        println!("{id} - {total} illusts");
+        println!("{user} - {total} illusts");
         crawl_illusts(
             crawler,
             directory_path,
@@ -103,7 +103,7 @@ pub fn crawl_users(crawler: &Crawler, output: PathBuf, users: Vec<String>) {
 }
 
 pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
-    // Crawl the illust page.
+    // Crawl illust pages.
     let page_urls: Vec<_> = illusts
         .iter()
         .map(|id| format!("https://www.pixiv.net/artworks/{id}"))
@@ -114,7 +114,7 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
         .collect();
     let page_results = crawler.get_text("", page_requests);
 
-    // Crawl the image index.
+    // Crawl image indexes.
     let index_urls: Vec<_> = illusts
         .iter()
         .map(|id| format!("https://www.pixiv.net/ajax/illust/{id}/pages"))
@@ -147,7 +147,6 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
             }
         });
 
-    // Crawl each illust.
     for (id, page, index) in illusts {
         // Extract basic information from the illust page.
         let document = kuchiki::parse_html().one(page);
@@ -173,21 +172,25 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
         };
         let title = illust["title"].as_str().unwrap();
 
-        // Create the illust directory.
-        let directory = sanitize_filename::sanitize(format!("[{user}] [{date}] {title} ({id})"));
-        let mut directory_path = output.clone();
-        directory_path.push(&directory);
-        fs::create_dir(&directory_path).unwrap();
-
-        // Crawl images in this illust.
+        // Create the illust directory if necessary.
         let image_urls: Vec<_> = index["body"]
             .as_array()
             .unwrap()
             .iter()
             .map(|image| image["urls"]["original"].as_str().unwrap())
             .collect();
+        let illust_name = sanitize_filename::sanitize(format!("[{user}] [{date}] {title} ({id})"));
+        let mut illust_path = output.clone();
+        illust_path.push(&illust_name);
+        if image_urls.len() > 1 {
+            fs::create_dir(&illust_path).unwrap();
+        };
+
+        // Crawl images in this illust.
         let image_requests = image_urls.iter().map(|url| (*url, Vec::new())).collect();
-        let image_results = crawler.get_byte(&directory, image_requests);
+        let image_results = crawler.get_byte(&illust_name, image_requests);
+
+        // Write images to local files.
         for ((i, url), result) in image_urls.iter().enumerate().zip(image_results) {
             let pg = i + 1;
             let image = match result {
@@ -199,17 +202,21 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
             };
             let ext = {
                 lazy_static! {
-                    static ref EXT_REGEX: Regex = Regex::new(r"\.[^\.]+$").unwrap();
+                    static ref EXT_REGEX: Regex = Regex::new(r"\.([^\.]+)$").unwrap();
                 }
                 let caps = EXT_REGEX.captures(url).unwrap();
-                caps[0].to_string()
+                caps[1].to_string()
             };
-
-            // Write the image to a local file.
-            let mut path = directory_path.clone();
-            path.push(format!("{id}_p{pg}{ext}"));
-            let mut file = File::create(&path).unwrap();
-            file.write_all(&image).unwrap();
+            if image_urls.len() == 1 {
+                illust_path.set_extension(&ext);
+                let mut file = File::create(&illust_path).unwrap();
+                file.write_all(&image).unwrap();
+            } else {
+                let mut path = illust_path.clone();
+                path.push(format!("{id}_p{i}.{ext}"));
+                let mut file = File::create(&path).unwrap();
+                file.write_all(&image).unwrap();
+            }
         }
     }
 }

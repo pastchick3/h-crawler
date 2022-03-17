@@ -4,17 +4,17 @@ mod pixiv;
 
 use clap::{Parser, Subcommand};
 use crawler::Crawler;
+use log::info;
 use serde_derive::Deserialize;
 use std::path::{Path, PathBuf};
 
 const CONCURRENCY: usize = 5;
-const TIMEOUT: u64 = 60;
+const TIMEOUT: u64 = 15;
 const RETRY: usize = 1;
 const OUTPUT: &str = ".";
-const X: bool = false;
 const RELOAD: usize = 1;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(version)]
 pub struct Arguments {
     #[clap(long, parse(from_os_str))]
@@ -36,12 +36,9 @@ pub struct Arguments {
     website: Option<Website>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Website {
     Ehentai {
-        #[clap(long)]
-        x: bool,
-
         #[clap(long)]
         reload: Option<usize>,
 
@@ -62,13 +59,13 @@ enum Website {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum PixivTarget {
     User { users: Vec<String> },
     Illust { illusts: Vec<String> },
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
 pub struct Config {
     concurrency: Option<usize>,
     timeout: Option<u64>,
@@ -78,20 +75,22 @@ pub struct Config {
     pixiv: Option<PixivConfig>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct EhentaiConfig {
-    x: Option<bool>,
     reload: Option<usize>,
     ipb_member_id: Option<String>,
     ipb_pass_hash: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct PixivConfig {
     phpsessid: Option<String>,
 }
 
 pub fn run(arguments: Arguments, config: Config) {
+    info!("{arguments:?}");
+    info!("{config:?}");
+
     let concurrency = arguments
         .concurrency
         .or(config.concurrency)
@@ -101,52 +100,43 @@ pub fn run(arguments: Arguments, config: Config) {
     let output = arguments
         .output
         .or(config.output)
-        .unwrap_or(Path::new(OUTPUT).to_path_buf());
+        .unwrap_or_else(|| Path::new(OUTPUT).to_path_buf());
     match arguments.website {
         Some(Website::Ehentai {
-            x,
             reload,
             ipb_member_id,
             ipb_pass_hash,
             galleries,
         }) => {
-            let x = x | config
-                .ehentai
-                .as_ref()
-                .map(|eh| eh.x)
-                .flatten()
-                .unwrap_or(X);
             let reload = reload
-                .or(config.ehentai.as_ref().map(|eh| eh.reload).flatten())
+                .or_else(|| config.ehentai.as_ref().and_then(|eh| eh.reload))
                 .unwrap_or(RELOAD);
             let ipb_member_id = ipb_member_id
-                .or(config
-                    .ehentai
-                    .as_ref()
-                    .map(|eh| eh.ipb_member_id.clone())
-                    .flatten())
+                .or_else(|| {
+                    config
+                        .ehentai
+                        .as_ref()
+                        .and_then(|eh| eh.ipb_member_id.clone())
+                })
                 .expect("`ipb_member_id` is not defined");
             let ipb_pass_hash = ipb_pass_hash
-                .or(config
-                    .ehentai
-                    .as_ref()
-                    .map(|eh| eh.ipb_pass_hash.clone())
-                    .flatten())
+                .or_else(|| {
+                    config
+                        .ehentai
+                        .as_ref()
+                        .and_then(|eh| eh.ipb_pass_hash.clone())
+                })
                 .expect("`ipb_pass_hash` is not defined");
             let cookies = vec![
                 ("ipb_member_id", ipb_member_id.as_str()),
                 ("ipb_pass_hash", ipb_pass_hash.as_str()),
             ];
             let crawler = Crawler::new(concurrency, timeout, Vec::new(), cookies, retry);
-            ehentai::crawl_galleries(&crawler, output, x, reload, galleries);
+            ehentai::crawl_galleries(&crawler, output, reload, galleries);
         }
         Some(Website::Pixiv { phpsessid, target }) => {
             let phpsessid = phpsessid
-                .or(config
-                    .pixiv
-                    .as_ref()
-                    .map(|px| px.phpsessid.clone())
-                    .flatten())
+                .or_else(|| config.pixiv.as_ref().and_then(|px| px.phpsessid.clone()))
                 .expect("`phpsessid` is not defined");
             let crawler = Crawler::new(
                 concurrency,
