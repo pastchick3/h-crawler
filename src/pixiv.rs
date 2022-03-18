@@ -93,7 +93,7 @@ pub fn crawl_users(crawler: &Crawler, output: PathBuf, users: Vec<String>) {
             (1, illusts.len())
         };
         let total = end - start + 1;
-        println!("{user} - {total} illusts");
+        println!("{user} - {total} Illusts");
         crawl_illusts(
             crawler,
             directory_path,
@@ -112,18 +112,18 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
         .iter()
         .map(|url| (url.as_str(), Vec::new()))
         .collect();
-    let page_results = crawler.get_text("", page_requests);
+    let page_results = crawler.get_text("Illust Pages", page_requests);
 
     // Crawl image indexes.
     let index_urls: Vec<_> = illusts
         .iter()
-        .map(|id| format!("https://www.pixiv.net/ajax/illust/{id}/pages"))
+        .map(|illust| format!("https://www.pixiv.net/ajax/illust/{illust}/pages"))
         .collect();
     let index_requests = index_urls
         .iter()
         .map(|url| (url.as_str(), Vec::new()))
         .collect();
-    let index_results = crawler.get_json("", index_requests);
+    let index_results = crawler.get_json("Image Indexes", index_requests);
 
     // Only crawl illusts that have both of them sucessfully crawled.
     let illusts = illusts
@@ -202,18 +202,19 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
             };
             let ext = {
                 lazy_static! {
-                    static ref EXT_REGEX: Regex = Regex::new(r"\.([^\.]+)$").unwrap();
+                    static ref EXT_REGEX: Regex = Regex::new(r"\.[^\.]+$").unwrap();
                 }
                 let caps = EXT_REGEX.captures(url).unwrap();
-                caps[1].to_string()
+                caps[0].to_string()
             };
             if image_urls.len() == 1 {
-                illust_path.set_extension(&ext);
+                let mut illust_path = illust_path.clone().into_os_string();
+                illust_path.push(&ext);
                 let mut file = File::create(&illust_path).unwrap();
                 file.write_all(&image).unwrap();
             } else {
                 let mut path = illust_path.clone();
-                path.push(format!("{id}_p{i}.{ext}"));
+                path.push(format!("{id}_p{i}{ext}"));
                 let mut file = File::create(&path).unwrap();
                 file.write_all(&image).unwrap();
             }

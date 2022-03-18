@@ -1,5 +1,5 @@
 mod crawler;
-mod ehentai;
+mod exhentai;
 mod pixiv;
 
 use clap::{Parser, Subcommand};
@@ -8,8 +8,8 @@ use log::info;
 use serde_derive::Deserialize;
 use std::path::{Path, PathBuf};
 
-const CONCURRENCY: usize = 5;
-const TIMEOUT: u64 = 15;
+const CONCURRENCY: usize = 8;
+const TIMEOUT: u64 = 30;
 const RETRY: usize = 1;
 const OUTPUT: &str = ".";
 const RELOAD: usize = 1;
@@ -38,7 +38,7 @@ pub struct Arguments {
 
 #[derive(Subcommand, Debug)]
 enum Website {
-    Ehentai {
+    Exhentai {
         #[clap(long)]
         reload: Option<usize>,
 
@@ -71,12 +71,12 @@ pub struct Config {
     timeout: Option<u64>,
     retry: Option<usize>,
     output: Option<PathBuf>,
-    ehentai: Option<EhentaiConfig>,
+    exhentai: Option<ExhentaiConfig>,
     pixiv: Option<PixivConfig>,
 }
 
 #[derive(Deserialize, Debug)]
-struct EhentaiConfig {
+struct ExhentaiConfig {
     reload: Option<usize>,
     ipb_member_id: Option<String>,
     ipb_pass_hash: Option<String>,
@@ -102,19 +102,19 @@ pub fn run(arguments: Arguments, config: Config) {
         .or(config.output)
         .unwrap_or_else(|| Path::new(OUTPUT).to_path_buf());
     match arguments.website {
-        Some(Website::Ehentai {
+        Some(Website::Exhentai {
             reload,
             ipb_member_id,
             ipb_pass_hash,
             galleries,
         }) => {
             let reload = reload
-                .or_else(|| config.ehentai.as_ref().and_then(|eh| eh.reload))
+                .or_else(|| config.exhentai.as_ref().and_then(|eh| eh.reload))
                 .unwrap_or(RELOAD);
             let ipb_member_id = ipb_member_id
                 .or_else(|| {
                     config
-                        .ehentai
+                        .exhentai
                         .as_ref()
                         .and_then(|eh| eh.ipb_member_id.clone())
                 })
@@ -122,7 +122,7 @@ pub fn run(arguments: Arguments, config: Config) {
             let ipb_pass_hash = ipb_pass_hash
                 .or_else(|| {
                     config
-                        .ehentai
+                        .exhentai
                         .as_ref()
                         .and_then(|eh| eh.ipb_pass_hash.clone())
                 })
@@ -132,7 +132,7 @@ pub fn run(arguments: Arguments, config: Config) {
                 ("ipb_pass_hash", ipb_pass_hash.as_str()),
             ];
             let crawler = Crawler::new(concurrency, timeout, Vec::new(), cookies, retry);
-            ehentai::crawl_galleries(&crawler, output, reload, galleries);
+            exhentai::crawl_galleries(&crawler, output, reload, galleries);
         }
         Some(Website::Pixiv { phpsessid, target }) => {
             let phpsessid = phpsessid

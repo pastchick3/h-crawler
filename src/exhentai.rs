@@ -14,12 +14,7 @@ struct Image {
     result: Result<Vec<u8>, String>,
 }
 
-pub fn crawl_galleries(
-    crawler: &Crawler,
-    output: PathBuf,
-    reload: usize,
-    galleries: Vec<String>,
-) {
+pub fn crawl_galleries(crawler: &Crawler, output: PathBuf, reload: usize, galleries: Vec<String>) {
     for gallery in galleries {
         // Process the gallery id and the range.
         let parts: Vec<_> = gallery.split('/').collect();
@@ -29,17 +24,7 @@ pub fn crawl_galleries(
         }
         let id = format!("{}/{}/", parts[0], parts[1]);
         let range = parts[2];
-
-        // Detect whether this gallery is available in E-Hentai.
-        let mut hp = "EH";
-        let mut url = format!("https://exhentai.org/g/{id}");
-        if crawler
-            .get_text("", vec![(&url, Vec::new())])
-            .pop()
-            .unwrap().is_err() {
-                hp = "EX";
-                url = format!("https://exhentai.org/g/{id}");
-            }
+        let url = format!("https://exhentai.org/g/{id}");
 
         // Crawl gallery's home page.
         let home_result = crawler
@@ -53,9 +38,9 @@ pub fn crawl_galleries(
                 continue;
             }
         };
-        let document = kuchiki::parse_html().one(page);
 
         // Extract the gallery title and the image count.
+        let document = kuchiki::parse_html().one(page);
         let title = extract_title(&document);
         let count = extract_count(&document);
 
@@ -140,7 +125,7 @@ pub fn crawl_galleries(
                 })
                 .collect();
             let image_page_results =
-                crawler.get_text(&format!("{title} ({hp}, page, reload={r})"), image_page_requests);
+                crawler.get_text(&format!("{title} (page, reload={r})"), image_page_requests);
 
             // Crawl images.
             let uncrawled_images: Vec<_> = uncrawled_images
@@ -164,7 +149,7 @@ pub fn crawl_galleries(
                 .map(|image| (image.image_url.as_str(), Vec::new()))
                 .collect();
             let image_results =
-                crawler.get_byte(&format!("{title} ({hp}, image, reload={r})"), image_requests);
+                crawler.get_byte(&format!("{title} (image, reload={r})"), image_requests);
             for (image, result) in uncrawled_images.into_iter().zip(image_results) {
                 image.result = result;
             }
@@ -208,7 +193,7 @@ fn extract_count(document: &NodeRef) -> usize {
         static ref COUNT_REGEX: Regex = Regex::new(r"([,\d]+)\s+images$").unwrap();
     }
     let caps = COUNT_REGEX.captures(&count).unwrap();
-    caps[1].replace(",", "").parse().unwrap()
+    caps[1].replace(',', "").parse().unwrap()
 }
 
 fn extract_image_page_urls(document: &NodeRef) -> Vec<String> {

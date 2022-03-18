@@ -13,12 +13,9 @@ kuchiki = "0.8.1"
 lazy_static = "1.4.0"
 log = "0.4.14"
 regex = "1.5.5"
+reqwest = { version = "0.11.10", features = ["blocking"] }
 sanitize-filename = "0.3.0"
 serde = "1.0.136"
 serde_derive = "1.0.136"
 serde_json = "1.0.79"
 toml = "0.5.8"
-ureq = {version="2.4.0",features=["native-tls"]}
-native-tls = "0.2.8"
-reqwest = {version="0.11.10", features=["blocking"]}
-tokio = "1.17.0"

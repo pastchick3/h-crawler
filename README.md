@@ -6,13 +6,13 @@
 
 | Section | Field | Value Type | Is Required (Default) | Description |
 | --- | --- | --- | --- | --- |
-| N/A | `concurrency` | Integer | No (`5`) | Maximum concurrent requests |
-| N/A | `timeout` | Integer | No (`60`) | Overall timeout for requests in seconds |
+| N/A | `concurrency` | Integer | No (`8`) | Maximum concurrent requests |
+| N/A | `timeout` | Integer | No (`30`) | Overall timeout for requests in seconds |
 | N/A | `retry` | Integer | No (`1`) | Retrying times for requests |
 | N/A | `output` | String | No (`.`) | Path to store downloaded contents |
-| `ehentai` | `reload` | Integer | No (`1`) | Reloading times for images[^1] |
-| `ehentai` | `ipb_member_id` | String | Yes | Cookie for ExHentai login |
-| `ehentai` | `ipb_pass_hash` | String | Yes | Cookie for ExHentai login |
+| `exhentai` | `reload` | Integer | No (`1`) | Reloading times for images[^1] |
+| `exhentai` | `ipb_member_id` | String | Yes | Cookie for ExHentai login |
+| `exhentai` | `ipb_pass_hash` | String | Yes | Cookie for ExHentai login |
 | `pixiv` | `phpsessid` | String | Yes | Cookie for pixiv login |
 
 [^1]: This corresponds to the `Click here if the image fails loading` button, which will try to fetch the image from another server.
@@ -21,7 +21,7 @@
 
 ``` bash
 # EHentai
-$ h-crawler ehentai <gallery_id>/<gallery_token>/[<range>]...
+$ h-crawler exhentai <gallery_id>/<gallery_token>/[<range>]...
 # pixiv
 $ h-crawler pixiv user <user_id>[/<range>]...
 $ h-crawler pixiv illust <illust_id>...
