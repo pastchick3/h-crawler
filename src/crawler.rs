@@ -125,10 +125,11 @@ impl Crawler {
                     // Execute the request.
                     let result = client.lock().unwrap().execute(request.try_clone().unwrap());
                     let result = match result {
-                        Ok(resp) => match resp.bytes() {
+                        Ok(resp) if resp.status().is_success() => match resp.bytes() {
                             Ok(bytes) => Ok(bytes.to_vec()),
                             Err(err) => Err(err.to_string()),
                         },
+                        Ok(resp) => Err(resp.status().to_string()),
                         Err(err) => Err(err.to_string()),
                     };
 
