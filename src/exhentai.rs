@@ -102,77 +102,93 @@ pub fn crawl_galleries(crawler: &Crawler, output: PathBuf, reload: usize, galler
             })
             .collect();
 
-        for r in 0..=reload {
-            // Crawl image pages.
-            let uncrawled_images: Vec<_> = images
-                .iter_mut()
-                .filter(|image| image.result.is_err())
-                .collect();
-            if uncrawled_images.is_empty() {
-                break;
-            }
-            let image_page_requests = uncrawled_images
-                .iter()
-                .map(|image| {
-                    (
-                        image.page_url.as_str(),
-                        image
-                            .reload_values
-                            .iter()
-                            .map(|v| ("nl", v.as_str()))
-                            .collect(),
-                    )
-                })
-                .collect();
-            let image_page_results =
-                crawler.get_text(&format!("{title} (page, reload={r})"), image_page_requests);
+        let mut batch = 0;
+        while !images.is_empty() {
+            // Crawl a huge gallery in batches.
+            batch += 1;
+            let end = if images.len() > 100 {
+                100
+            } else {
+                images.len()
+            };
+            let mut images: Vec<_> = images.drain(..end).collect();
 
-            // Crawl images.
-            let uncrawled_images: Vec<_> = uncrawled_images
-                .into_iter()
-                .zip(image_page_results)
-                .filter_map(|(image, result)| match result {
-                    Ok(page) => {
-                        let document = kuchiki::parse_html().one(page);
-                        image.image_url = extract_image_url(&document);
-                        image.reload_values.push(extract_reload_value(&document));
-                        Some(image)
-                    }
-                    Err(err) => {
-                        image.result = Err(err);
-                        None
-                    }
-                })
-                .collect();
-            let image_requests = uncrawled_images
-                .iter()
-                .map(|image| (image.image_url.as_str(), Vec::new()))
-                .collect();
-            let image_results =
-                crawler.get_byte(&format!("{title} (image, reload={r})"), image_requests);
-            for (image, result) in uncrawled_images.into_iter().zip(image_results) {
-                image.result = result;
-            }
-        }
-
-        // Write images to local files.
-        for (i, image) in images.iter().enumerate() {
-            let pg = i + 1;
-            match &image.result {
-                Ok(img) => {
-                    let ext = {
-                        lazy_static! {
-                            static ref EXT_REGEX: Regex = Regex::new(r"\.[^\.]+$").unwrap();
-                        }
-                        let caps = EXT_REGEX.captures(&image.image_url).unwrap();
-                        caps[0].to_string()
-                    };
-                    let mut path = directory_path.clone();
-                    path.push(format!("{pg:0>4}{ext}"));
-                    let mut file = File::create(path).unwrap();
-                    file.write_all(img).unwrap();
+            for r in 0..=reload {
+                // Crawl image pages.
+                let uncrawled_images: Vec<_> = images
+                    .iter_mut()
+                    .filter(|image| image.result.is_err())
+                    .collect();
+                if uncrawled_images.is_empty() {
+                    break;
                 }
-                Err(err) => println!("Fail to crawl page {pg} for Gallery {id}: {err}"),
+                let image_page_requests = uncrawled_images
+                    .iter()
+                    .map(|image| {
+                        (
+                            image.page_url.as_str(),
+                            image
+                                .reload_values
+                                .iter()
+                                .map(|v| ("nl", v.as_str()))
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let image_page_results = crawler.get_text(
+                    &format!("{title} (batch {batch}, page, reload {r})"),
+                    image_page_requests,
+                );
+
+                // Crawl images.
+                let uncrawled_images: Vec<_> = uncrawled_images
+                    .into_iter()
+                    .zip(image_page_results)
+                    .filter_map(|(image, result)| match result {
+                        Ok(page) => {
+                            let document = kuchiki::parse_html().one(page);
+                            image.image_url = extract_image_url(&document);
+                            image.reload_values.push(extract_reload_value(&document));
+                            Some(image)
+                        }
+                        Err(err) => {
+                            image.result = Err(err);
+                            None
+                        }
+                    })
+                    .collect();
+                let image_requests = uncrawled_images
+                    .iter()
+                    .map(|image| (image.image_url.as_str(), Vec::new()))
+                    .collect();
+                let image_results = crawler.get_byte(
+                    &format!("{title} (batch {batch}, image, reload {r})"),
+                    image_requests,
+                );
+                for (image, result) in uncrawled_images.into_iter().zip(image_results) {
+                    image.result = result;
+                }
+            }
+
+            // Write images to local files.
+            for (i, image) in images.iter().enumerate() {
+                let pg = (batch - 1) * 100 + i + 1;
+                match &image.result {
+                    Ok(img) => {
+                        let ext = {
+                            lazy_static! {
+                                static ref EXT_REGEX: Regex = Regex::new(r"\.[^\.]+$").unwrap();
+                            }
+                            let caps = EXT_REGEX.captures(&image.image_url).unwrap();
+                            caps[0].to_string()
+                        };
+                        let mut path = directory_path.clone();
+                        path.push(format!("{pg:0>4}{ext}"));
+                        let mut file = File::create(path).unwrap();
+                        file.write_all(img).unwrap();
+                    }
+                    Err(err) => println!("Fail to crawl page {pg} for Gallery {id}: {err}"),
+                }
             }
         }
     }
