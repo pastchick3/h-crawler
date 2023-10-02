@@ -14,19 +14,22 @@
 | `exhentai` | `ipb_member_id` | String | Yes | Cookie for ExHentai login |
 | `exhentai` | `ipb_pass_hash` | String | Yes | Cookie for ExHentai login |
 | `pixiv` | `phpsessid` | String | Yes | Cookie for pixiv login |
+| `fanbox` | `fanboxsessid` | String | Yes | Cookie for FANBOX login |
 
 [^1]: This corresponds to the `Click here if the image fails loading` button, which will try to fetch the image from another server.
 
 ## Usage
 
 ``` bash
-# EHentai
+# ExHentai
 $ h-crawler exhentai <gallery_id>/<gallery_token>/[<range>]...
 # pixiv
 $ h-crawler pixiv user <user_id>[/<range>]...
 $ h-crawler pixiv illust <illust_id>...
+# FANBOX
+$ h-crawler fanbox <post_id>...
 ```
 
 `<range>` looks like `1-5`. The range index starts from 1 and it is inclusive on both sides.
 
-If an illust contains only one image, it will NOT be stored in a separate directory.
+If a task contains only one image, it will NOT be stored in a separate directory.

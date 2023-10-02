@@ -1,5 +1,6 @@
 mod crawler;
 mod exhentai;
+mod fanbox;
 mod pixiv;
 
 use clap::{Parser, Subcommand};
@@ -57,6 +58,12 @@ enum Website {
         #[clap(subcommand)]
         target: Option<PixivTarget>,
     },
+    Fanbox {
+        #[clap(long)]
+        fanboxsessid: Option<String>,
+
+        posts: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -73,6 +80,7 @@ pub struct Config {
     output: Option<PathBuf>,
     exhentai: Option<ExhentaiConfig>,
     pixiv: Option<PixivConfig>,
+    fanbox: Option<FanboxConfig>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -85,6 +93,11 @@ struct ExhentaiConfig {
 #[derive(Deserialize, Debug)]
 struct PixivConfig {
     phpsessid: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct FanboxConfig {
+    fanboxsessid: Option<String>,
 }
 
 pub fn run(arguments: Arguments, config: Config) {
@@ -152,6 +165,22 @@ pub fn run(arguments: Arguments, config: Config) {
                 }
                 None => (),
             }
+        }
+        Some(Website::Fanbox {
+            fanboxsessid,
+            posts,
+        }) => {
+            let fanboxsessid = fanboxsessid
+                .or(config.fanbox.and_then(|fb| fb.fanboxsessid))
+                .expect("`FANBOXSESSID` is not defined");
+            let crawler = Crawler::new(
+                concurrency,
+                timeout,
+                vec![("Origin", "https://www.fanbox.cc")],
+                vec![("FANBOXSESSID", &fanboxsessid)],
+                retry,
+            );
+            fanbox::crawl_posts(&crawler, output, posts);
         }
         None => {}
     }
