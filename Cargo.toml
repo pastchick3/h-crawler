@@ -1,6 +1,6 @@
 [package]
 name = "h-crawler"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["pastchick3 <pastchick3@gmail.com>"]
 edition = "2021"
 

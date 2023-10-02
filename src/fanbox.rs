@@ -41,27 +41,42 @@ pub fn crawl_posts(crawler: &Crawler, output: PathBuf, posts: Vec<String>) {
         };
         let title = info["body"]["title"].as_str().unwrap();
         let name = sanitize_filename::sanitize(format!("[{user}] [{date}] {title}"));
-        let mut output = output.join(&name);
+        let output = output.join(&name);
 
         // Create a directory if there is more than one image.
-        let image_map = info["body"]["body"]["imageMap"].as_object().unwrap();
-        let image_urls: Vec<_> = info["body"]["body"]["blocks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|blk| {
-                let blk = blk.as_object().unwrap();
-                if blk["type"] == "image" {
-                    let image_id = blk["imageId"].as_str().unwrap();
-                    Some((
-                        image_map[image_id]["originalUrl"].as_str().unwrap(),
-                        image_map[image_id]["extension"].as_str().unwrap(),
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let image_urls: Vec<_> = if let Some(images) = info["body"]["body"].get("images") {
+            images
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|img| img.as_object().unwrap())
+                .map(|img| {
+                    (
+                        img["originalUrl"].as_str().unwrap(),
+                        img["extension"].as_str().unwrap(),
+                    )
+                })
+                .collect()
+        } else {
+            let image_map = info["body"]["body"]["imageMap"].as_object().unwrap();
+            info["body"]["body"]["blocks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|blk| {
+                    let blk = blk.as_object().unwrap();
+                    if blk["type"] == "image" {
+                        let image_id = blk["imageId"].as_str().unwrap();
+                        Some((
+                            image_map[image_id]["originalUrl"].as_str().unwrap(),
+                            image_map[image_id]["extension"].as_str().unwrap(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
         if image_urls.len() > 1 {
             fs::create_dir(&output).unwrap();
         };
@@ -83,7 +98,8 @@ pub fn crawl_posts(crawler: &Crawler, output: PathBuf, posts: Vec<String>) {
                 }
             };
             if image_urls.len() == 1 {
-                output.set_extension(ext);
+                let mut output = output.clone().into_os_string();
+                output.push(format!(".{ext}"));
                 let mut file = File::create(&output).unwrap();
                 file.write_all(&image).unwrap();
             } else {
