@@ -15,6 +15,7 @@
 | `exhentai` | `ipb_pass_hash` | String | Yes | Cookie for ExHentai login |
 | `pixiv` | `phpsessid` | String | Yes | Cookie for pixiv login |
 | `fanbox` | `fanboxsessid` | String | Yes | Cookie for FANBOX login |
+| `fanbox` | `cf_clearance` | String | Yes | Cookie for FANBOX login |
 
 [^1]: This corresponds to the `Click here if the image fails loading` button, which will try to fetch the image from another server.
 

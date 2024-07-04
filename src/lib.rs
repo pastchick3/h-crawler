@@ -62,6 +62,9 @@ enum Website {
         #[clap(long)]
         fanboxsessid: Option<String>,
 
+        #[clap(long)]
+        cf_clearance: Option<String>,
+
         posts: Vec<String>,
     },
 }
@@ -98,6 +101,7 @@ struct PixivConfig {
 #[derive(Deserialize, Debug)]
 struct FanboxConfig {
     fanboxsessid: Option<String>,
+    cf_clearance: Option<String>,
 }
 
 pub fn run(arguments: Arguments, config: Config) {
@@ -168,16 +172,28 @@ pub fn run(arguments: Arguments, config: Config) {
         }
         Some(Website::Fanbox {
             fanboxsessid,
+            cf_clearance,
             posts,
         }) => {
             let fanboxsessid = fanboxsessid
-                .or(config.fanbox.and_then(|fb| fb.fanboxsessid))
+                .or_else(|| {
+                    config
+                        .fanbox
+                        .as_ref()
+                        .and_then(|fb| fb.fanboxsessid.clone())
+                })
                 .expect("`FANBOXSESSID` is not defined");
+            let cf_clearance = cf_clearance
+                .or_else(|| config.fanbox.and_then(|fb| fb.cf_clearance))
+                .expect("`cf_clearance` is not defined");
             let crawler = Crawler::new(
                 concurrency,
                 timeout,
                 vec![("Origin", "https://www.fanbox.cc")],
-                vec![("FANBOXSESSID", &fanboxsessid)],
+                vec![
+                    ("FANBOXSESSID", &fanboxsessid),
+                    ("cf_clearance", &cf_clearance),
+                ],
                 retry,
             );
             fanbox::crawl_posts(&crawler, output, posts);

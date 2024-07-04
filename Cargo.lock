@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "h-crawler"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "clap",
  "env_logger",

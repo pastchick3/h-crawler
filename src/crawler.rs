@@ -9,11 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-const USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ",
-    "AppleWebKit/537.36 (KHTML, like Gecko) ",
-    "Chrome/99.0.4844.51 Safari/537.36 Edg/99.0.1150.39",
-);
+const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
 
 struct Progress {
     name: String,
