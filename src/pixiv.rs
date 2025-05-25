@@ -106,7 +106,7 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
     // Crawl illust pages.
     let page_urls: Vec<_> = illusts
         .iter()
-        .map(|id| format!("https://www.pixiv.net/artworks/{id}"))
+        .map(|id| format!("https://www.pixiv.net/ajax/illust/{id}"))
         .collect();
     let page_requests = page_urls
         .iter()
@@ -149,20 +149,10 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
 
     for (id, page, index) in illusts {
         // Extract basic information from the illust page.
-        let document = kuchiki::parse_html().one(page);
-        let json_str = document
-            .select_first("#meta-preload-data")
-            .unwrap()
-            .attributes
-            .borrow()
-            .get("content")
-            .unwrap()
-            .to_string();
-        let json: Value = serde_json::from_str(&json_str).unwrap();
-        let illust = &json["illust"][&id];
-        let user = illust["userName"].as_str().unwrap();
+        let json: Value = serde_json::from_str(&page).unwrap();
+        let user = json["body"]["userName"].as_str().unwrap();
         let date = {
-            let date = illust["createDate"].as_str().unwrap();
+            let date = json["body"]["createDate"].as_str().unwrap();
             lazy_static! {
                 static ref DATE_REGEX: Regex =
                     Regex::new(r"([0-9]{2})-([0-9]{2})-([0-9]{2})").unwrap();
@@ -170,7 +160,7 @@ pub fn crawl_illusts(crawler: &Crawler, output: PathBuf, illusts: Vec<String>) {
             let caps = DATE_REGEX.captures(date).unwrap();
             format!("{}{}{}", &caps[1], &caps[2], &caps[3])
         };
-        let title = illust["title"].as_str().unwrap();
+        let title = json["body"]["title"].as_str().unwrap();
 
         // Create the illust directory if necessary.
         let image_urls: Vec<_> = index["body"]
