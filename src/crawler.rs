@@ -110,52 +110,54 @@ impl Crawler {
             let requests = requests.clone();
             let results = results.clone();
             let progress = progress.clone();
-            thread::spawn(move || loop {
-                thread::sleep(Duration::from_millis(1000 / concurrency as u64));
+            thread::spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_millis(1000 / concurrency as u64));
 
-                // Check for waiting requests.
-                let request = requests.lock().unwrap().pop();
-                if let Some(CrawlerRequest { id, request, retry }) = request {
-                    debug!("Request {id} - Start in Thread {c}: {request:?}");
+                    // Check for waiting requests.
+                    let request = requests.lock().unwrap().pop();
+                    if let Some(CrawlerRequest { id, request, retry }) = request {
+                        debug!("Request {id} - Start in Thread {c}: {request:?}");
 
-                    // Execute the request.
-                    let result = client.lock().unwrap().execute(request.try_clone().unwrap());
-                    let result = match result {
-                        Ok(resp) if resp.status().is_success() => match resp.bytes() {
-                            Ok(bytes) => Ok(bytes.to_vec()),
+                        // Execute the request.
+                        let result = client.lock().unwrap().execute(request.try_clone().unwrap());
+                        let result = match result {
+                            Ok(resp) if resp.status().is_success() => match resp.bytes() {
+                                Ok(bytes) => Ok(bytes.to_vec()),
+                                Err(err) => Err(err.to_string()),
+                            },
+                            Ok(resp) => Err(resp.status().to_string()),
                             Err(err) => Err(err.to_string()),
-                        },
-                        Ok(resp) => Err(resp.status().to_string()),
-                        Err(err) => Err(err.to_string()),
-                    };
+                        };
 
-                    // Handle the response.
-                    match result {
-                        result @ Ok(_) => {
-                            debug!("Request {id} - Succeed in Thread {c}");
+                        // Handle the response.
+                        match result {
+                            result @ Ok(_) => {
+                                debug!("Request {id} - Succeed in Thread {c}");
 
-                            progress.lock().unwrap().make_progress();
-                            results.lock().unwrap().push(CrawlerResult { id, result });
-                        }
-                        Err(err) if retry == 0 => {
-                            debug!("Request {id} - Fail in Thread {c}: {err}");
+                                progress.lock().unwrap().make_progress();
+                                results.lock().unwrap().push(CrawlerResult { id, result });
+                            }
+                            Err(err) if retry == 0 => {
+                                debug!("Request {id} - Fail in Thread {c}: {err}");
 
-                            results.lock().unwrap().push(CrawlerResult {
-                                id,
-                                result: Err(err),
-                            });
-                        }
-                        Err(err) => {
-                            debug!("Request {id} - Retry in Thread {c}: {err}");
-
-                            requests.lock().unwrap().insert(
-                                0,
-                                CrawlerRequest {
+                                results.lock().unwrap().push(CrawlerResult {
                                     id,
-                                    request,
-                                    retry: retry - 1,
-                                },
-                            );
+                                    result: Err(err),
+                                });
+                            }
+                            Err(err) => {
+                                debug!("Request {id} - Retry in Thread {c}: {err}");
+
+                                requests.lock().unwrap().insert(
+                                    0,
+                                    CrawlerRequest {
+                                        id,
+                                        request,
+                                        retry: retry - 1,
+                                    },
+                                );
+                            }
                         }
                     }
                 }
